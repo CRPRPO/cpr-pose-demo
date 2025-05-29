@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -33,7 +34,6 @@
   <div id="info">準備中...</div>
   <div id="rate">速率偵測中...</div>
 
-  <!-- 正確引入 MediaPipe 套件 -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -48,22 +48,28 @@
     canvas.height = window.innerHeight;
 
     let timestamps = [];
+    let rollingRates = [];
     let prevY = null;
     let direction = null;
 
     function updateRate() {
       const now = Date.now();
       timestamps.push(now);
-      const windowStart = now - 10000;
+      const windowStart = now - 5000; // 改為5秒
       timestamps = timestamps.filter(t => t > windowStart);
-      const rate = Math.round((timestamps.length / 10) * 60);
+      const rate = Math.round((timestamps.length / 5) * 60); // 每分鐘速率
+
+      rollingRates.push(rate);
+      if (rollingRates.length > 3) rollingRates.shift(); // 滑動平均3次
+
+      const avgRate = Math.round(rollingRates.reduce((a, b) => a + b) / rollingRates.length);
 
       let color = 'white';
-      if (rate >= 100 && rate <= 120) color = 'lime';
-      else if (rate >= 80 && rate <= 140) color = 'yellow';
+      if (avgRate >= 100 && avgRate <= 120) color = 'lime';
+      else if (avgRate >= 80 && avgRate <= 140) color = 'yellow';
       else color = 'red';
 
-      rateDiv.textContent = `壓胸速率：${rate} 下/分鐘`;
+      rateDiv.textContent = `壓胸速率：${avgRate} 下/分鐘`;
       rateDiv.style.color = color;
     }
 
@@ -84,9 +90,9 @@
       prevY = y;
     }
 
-   const pose = new Pose({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-});
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
 
     pose.setOptions({
       modelComplexity: 0,
