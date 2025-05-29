@@ -2,138 +2,194 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 精簡追蹤版</title>
+  <title>CPR 發送端 - 速率偵測整合版</title>
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
-    video, canvas {
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+    }
+    video,
+    canvas {
       position: absolute;
-      top: 0; left: 0;
+      top: 0;
+      left: 0;
       width: 100vw;
       height: 100vh;
     }
-    #info {
+    #info,
+    #rate {
       position: absolute;
-      bottom: 5vh;
       left: 50%;
       transform: translateX(-50%);
       color: white;
-      background: rgba(0,0,0,0.8);
-      padding: 20px 40px;
-      border-radius: 20px;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 8px 16px;
+      border-radius: 8px;
       font-size: 80px;
       font-weight: bold;
       z-index: 10;
     }
+    #info {
+      bottom: 5vh;
+    }
+    #rate {
+      top: 2vh;
+    }
   </style>
 </head>
 <body>
-  <div id="info">🔴 正在偵測中...</div>
   <video id="video" autoplay playsinline muted></video>
-  <canvas id="canvas"></canvas>
+  <canvas id="output"></canvas>
+  <div id="info">準備中...</div>
+  <div id="rate">速率偵測中...</div>
+  <script type="module">
+    import '@mediapipe/pose';
+    import '@mediapipe/camera_utils';
+    import { Pose } from '@mediapipe/pose';
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-
-  <script>
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('canvas');
-    const canvasCtx = canvasElement.getContext('2d');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('output');
+    const ctx = canvas.getContext('2d');
     const infoDiv = document.getElementById('info');
+    const rateDiv = document.getElementById('rate');
 
-    const pose = new window.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let timestamps = [];
+    let prevY = null;
+    let direction = null;
+
+    function updateRate() {
+      const now = Date.now();
+      timestamps.push(now);
+      const windowStart = now - 10000;
+      timestamps = timestamps.filter((t) => t > windowStart);
+      const rate = Math.round((timestamps.length / 10) * 60);
+
+      let color = 'white';
+      if (rate >= 100 && rate <= 120) color = 'lime';
+      else if (rate >= 80 && rate <= 140) color = 'yellow';
+      else color = 'red';
+
+      rateDiv.textContent = `壓胸速率：${rate} 下/分鐘`;
+      rateDiv.style.color = color;
+    }
+
+    function detectCompression(y) {
+      if (prevY === null) {
+        prevY = y;
+        return;
+      }
+      const delta = y - prevY;
+
+      if (direction === null) {
+        direction = delta > 0 ? 'down' : 'up';
+      } else if (direction === 'down' && delta < -0.015) {
+        // 偵測上升 = 壓胸結束
+        updateRate();
+        direction = 'up';
+      } else if (direction === 'up' && delta > 0.015) {
+        direction = 'down';
+      }
+
+      prevY = y;
+    }
+
+    const pose = new Pose({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
     });
 
     pose.setOptions({
       modelComplexity: 0,
       smoothLandmarks: true,
+      enableSegmentation: false,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5,
     });
 
-    const sides = {
-      left:  { label: '左手', points: [15, 11, 23], names: ['Wrist', 'Shoulder', 'Hip'] },
-      right: { label: '右手', points: [16, 12, 24], names: ['Wrist', 'Shoulder', 'Hip'] }
-    };
-
     pose.onResults((results) => {
-      canvasElement.width = videoElement.videoWidth;
-      canvasElement.height = videoElement.videoHeight;
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-      if (!results.poseLandmarks) {
-        infoDiv.textContent = "❌ 無法偵測骨架";
-        return;
-      }
+      if (!results.poseLandmarks) return;
 
       const lm = results.poseLandmarks;
+      const points = [
+        { name: 'left', ids: [15, 11, 23] },
+        { name: 'right', ids: [16, 12, 24] },
+      ];
 
-      const leftValid = sides.left.points.filter(i => lm[i].visibility > 0.8).length;
-      const rightValid = sides.right.points.filter(i => lm[i].visibility > 0.8).length;
-      const activeSide = leftValid >= rightValid ? sides.left : sides.right;
+      let visibleSide = null;
+      let maxVisible = -1;
 
-      infoDiv.textContent = activeSide.label;
-
-      // 畫線
-      canvasCtx.strokeStyle = "red";
-      canvasCtx.lineWidth = 4;
-      canvasCtx.beginPath();
-      const pts = activeSide.points.map(i => lm[i]);
-      for (let i = 0; i < pts.length - 1; i++) {
-        const p1 = pts[i];
-        const p2 = pts[i + 1];
-        if (p1 && p2 && p1.visibility > 0.8 && p2.visibility > 0.8) {
-          canvasCtx.moveTo(p1.x * canvasElement.width, p1.y * canvasElement.height);
-          canvasCtx.lineTo(p2.x * canvasElement.width, p2.y * canvasElement.height);
+      points.forEach((side) => {
+        const count = side.ids.filter((id) => lm[id].visibility > 0.8).length;
+        if (count > maxVisible) {
+          maxVisible = count;
+          visibleSide = side;
         }
-      }
-      canvasCtx.stroke();
+      });
 
-      // 畫點與標籤
-      for (let i = 0; i < activeSide.points.length; i++) {
-        const index = activeSide.points[i];
-        const point = lm[index];
-        const label = activeSide.names[i];
-        if (point.visibility > 0.8) {
-          const x = point.x * canvasElement.width;
-          const y = point.y * canvasElement.height;
-          canvasCtx.beginPath();
-          canvasCtx.arc(x, y, 6, 0, 2 * Math.PI);
-          canvasCtx.fillStyle = "red";
-          canvasCtx.fill();
+      if (!visibleSide) return;
 
-          canvasCtx.font = "20px Arial";
-          canvasCtx.fillStyle = "white";
-          canvasCtx.fillText(label, x + 10, y - 10);
-        }
-      }
+      const [wristId, shoulderId, hipId] = visibleSide.ids;
+      const wrist = lm[wristId];
+      const shoulder = lm[shoulderId];
+      const hip = lm[hipId];
+
+      const toCanvas = (p) => ({
+        x: p.x * canvas.width,
+        y: p.y * canvas.height,
+      });
+
+      const pWrist = toCanvas(wrist);
+      const pShoulder = toCanvas(shoulder);
+      const pHip = toCanvas(hip);
+
+      // Draw dots
+      [pWrist, pShoulder, pHip].forEach((p) => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 10, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+      });
+
+      // Draw line: wrist → shoulder → hip
+      ctx.beginPath();
+      ctx.moveTo(pWrist.x, pWrist.y);
+      ctx.lineTo(pShoulder.x, pShoulder.y);
+      ctx.lineTo(pHip.x, pHip.y);
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      // Show label
+      infoDiv.textContent = visibleSide.name === 'left' ? '左手' : '右手';
+
+      // Trigger compression detection
+      detectCompression(shoulder.y);
     });
 
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: 'environment' } }
-        });
-        videoElement.srcObject = stream;
-        videoElement.onloadedmetadata = () => {
-          videoElement.play();
-          detectLoop();
-        };
-      } catch (err) {
-        infoDiv.textContent = '🚫 無法啟用後鏡頭，請確認權限';
-        console.error(err);
-      }
+    async function start() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      });
+      video.srcObject = stream;
+      const camera = new window.Camera(video, {
+        onFrame: async () => {
+          await pose.send({ image: video });
+        },
+        width: 640,
+        height: 480,
+      });
+      camera.start();
     }
 
-    async function detectLoop() {
-      const sendFrame = async () => {
-        await pose.send({ image: videoElement });
-        requestAnimationFrame(sendFrame);
-      };
-      sendFrame();
-    }
-
-    startCamera();
+    start();
   </script>
 </body>
 </html>
