@@ -1,11 +1,10 @@
-
 <!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 鏡頭發送端</title>
+  <title>CPR 偵測除錯版</title>
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
+    body { margin: 0; background: black; overflow: hidden; }
     video, canvas {
       position: absolute;
       top: 0; left: 0;
@@ -17,11 +16,11 @@
       left: 50%;
       transform: translateX(-50%);
       color: white;
-      background: rgba(0, 0, 0, 0.6);
-      padding: 8px 16px;
-      border-radius: 8px;
       font-size: 80px;
       font-weight: bold;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 12px;
+      border-radius: 10px;
       z-index: 10;
     }
     #info { bottom: 5vh; }
@@ -34,7 +33,6 @@
   <div id="info">準備中...</div>
   <div id="rate">速率偵測中...</div>
 
-  <!-- 正確引入 MediaPipe 套件 -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -55,8 +53,7 @@
     function updateRate() {
       const now = Date.now();
       timestamps.push(now);
-      const windowStart = now - 10000;
-      timestamps = timestamps.filter(t => t > windowStart);
+      timestamps = timestamps.filter(t => t > now - 10000); // 10秒內
       const rate = Math.round((timestamps.length / 10) * 60);
 
       let color = 'white';
@@ -139,7 +136,7 @@
 
       [pWrist, pShoulder, pHip].forEach(p => {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
+        ctx.arc(p.x, p.y, 10, 0, 2 * Math.PI);
         ctx.fillStyle = 'red';
         ctx.fill();
       });
@@ -155,24 +152,29 @@
       detectCompression(shoulder.y);
     });
 
-    async function start() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-        audio: false
-      });
-      video.srcObject = stream;
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false
+        });
+        video.srcObject = stream;
+        alert("✅ 鏡頭啟動成功！");
 
-      const camera = new Camera(video, {
-        onFrame: async () => {
-          await pose.send({ image: video });
-        },
-        width: 640,
-        height: 480
-      });
-      camera.start();
+        const camera = new Camera(video, {
+          onFrame: async () => {
+            await pose.send({ image: video });
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+      } catch (err) {
+        alert("🚫 鏡頭啟動失敗：" + err.message);
+      }
     }
 
-    start();
+    startCamera();
   </script>
 </body>
 </html>
