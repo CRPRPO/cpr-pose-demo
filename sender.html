@@ -84,9 +84,9 @@
       prevY = y;
     }
 
-    const pose = new Pose.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-    });
+   const pose = new Pose({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
 
     pose.setOptions({
       modelComplexity: 0,
