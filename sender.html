@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 骨架追蹤</title>
+  <title>CPR 發送端 - 鎖定後鏡頭</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -29,7 +29,6 @@
   <canvas id="canvas"></canvas>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
     const videoElement = document.getElementById('video');
@@ -64,20 +63,28 @@
     });
 
     async function startCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-        audio: false
-      });
-      videoElement.srcObject = stream;
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'environment' } }
+        });
+        videoElement.srcObject = stream;
 
-      const camera = new window.Camera(videoElement, {
-        onFrame: async () => {
-          await pose.send({ image: videoElement });
-        },
-        width: 640,
-        height: 480,
-      });
-      camera.start();
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          detectLoop();
+        };
+      } catch (err) {
+        document.getElementById('info').textContent = '🚫 無法開啟後鏡頭，請確認權限與設備設定';
+        console.error(err);
+      }
+    }
+
+    async function detectLoop() {
+      const sendFrame = async () => {
+        await pose.send({ image: videoElement });
+        requestAnimationFrame(sendFrame);
+      };
+      sendFrame();
     }
 
     startCamera();
