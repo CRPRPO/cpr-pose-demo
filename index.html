@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V1</title>
+  <title>CPR 偵測系統 V2</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -67,7 +67,6 @@
   <button id="startBtn">開啟鏡頭</button>
   <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
 
-  <!-- 外部 MediaPipe 載入會在 JS 動態注入 -->
   <script>
     const videoElement = document.getElementById('video');
     const canvasElement = document.getElementById('canvas');
@@ -81,16 +80,18 @@
     let pressCount = 0;
 
     async function loadScripts() {
-      const poseScript = document.createElement("script");
-      poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
-      document.body.appendChild(poseScript);
-
-      const cameraScript = document.createElement("script");
-      cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-      document.body.appendChild(cameraScript);
-
-      return new Promise((resolve) => {
-        cameraScript.onload = () => resolve();
+      return new Promise((resolve, reject) => {
+        const poseScript = document.createElement("script");
+        poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+        poseScript.onload = () => {
+          const cameraScript = document.createElement("script");
+          cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+          cameraScript.onload = resolve;
+          cameraScript.onerror = reject;
+          document.body.appendChild(cameraScript);
+        };
+        poseScript.onerror = reject;
+        document.body.appendChild(poseScript);
       });
     }
 
@@ -98,8 +99,7 @@
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         videoElement.srcObject = stream;
-
-        await loadScripts();  // 等 MediaPipe 載入完成
+        await loadScripts();
 
         const pose = new Pose.Pose({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -166,14 +166,15 @@
         });
         camera.start();
 
-        // 顯示畫面元素
+        // UI 顯示更新
         startBtn.style.display = 'none';
         videoElement.style.display = 'block';
         canvasElement.style.display = 'block';
         feedback.style.display = 'block';
         errorBox.style.display = 'none';
       } catch (err) {
-        console.error("🚨 無法開啟相機：", err);
+        console.error("🚨 鏡頭錯誤：", err);
+        errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
         errorBox.style.display = 'block';
       }
     }
