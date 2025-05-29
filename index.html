@@ -1,17 +1,18 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 即時偵測（點擊啟動鏡頭）</title>
+  <title>CPR 偵測｜手動啟動相機</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
       margin: 0;
+      background-color: black;
       overflow: hidden;
-      background: black;
     }
-    video, canvas {
+    canvas, video {
       position: absolute;
-      top: 0; left: 0;
+      top: 0;
+      left: 0;
       width: 100vw;
       height: 100vh;
       display: none;
@@ -63,7 +64,7 @@
   <canvas id="canvas"></canvas>
   <div id="feedback">準備中...</div>
   <button id="startBtn">開啟鏡頭</button>
-  <div id="error">⚠️ 鏡頭未啟動，請確認權限</div>
+  <div id="error">⚠️ 無法啟動鏡頭，請檢查權限</div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
@@ -80,11 +81,6 @@
     let lastPressTime = Date.now();
     let pressCount = 0;
 
-    function resizeCanvas() {
-      canvasElement.width = videoElement.videoWidth;
-      canvasElement.height = videoElement.videoHeight;
-    }
-
     const pose = new Pose.Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
@@ -98,56 +94,55 @@
     });
 
     pose.onResults((results) => {
-      if (results.image.width > 0) {
-        resizeCanvas();
-        canvasCtx.save();
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+      if (!results.poseLandmarks) return;
 
-        if (results.poseLandmarks) {
-          errorBox.style.display = 'none';
-          for (const landmark of results.poseLandmarks) {
-            canvasCtx.beginPath();
-            canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
-            canvasCtx.fillStyle = "red";
-            canvasCtx.fill();
-          }
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
 
-          const wristY = results.poseLandmarks[15].y;
-          const now = Date.now();
-          if (previousY !== null) {
-            const dy = previousY - wristY;
-            if (dy > 0.05 && now - lastPressTime > 300) {
-              pressCount++;
-              lastPressTime = now;
-            }
-          }
-          previousY = wristY;
-          const elapsed = (now - lastPressTime) / 1000;
-          const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-          if (frequency > 110) {
-            feedback.innerText = `太快了：${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
-          } else if (frequency < 90) {
-            feedback.innerText = `太慢了：${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(255,165,0,0.7)';
-          } else {
-            feedback.innerText = `完美節奏！${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
-          }
-        } else {
-          feedback.innerText = "請對準身體";
-          feedback.style.backgroundColor = 'rgba(0,0,0,0.5)';
-        }
-        canvasCtx.restore();
-      } else {
-        errorBox.style.display = 'block';
+      for (const landmark of results.poseLandmarks) {
+        canvasCtx.beginPath();
+        canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
+        canvasCtx.fillStyle = "red";
+        canvasCtx.fill();
       }
+
+      const wristY = results.poseLandmarks[15].y;
+      const now = Date.now();
+      if (previousY !== null) {
+        const dy = previousY - wristY;
+        if (dy > 0.05 && now - lastPressTime > 300) {
+          pressCount++;
+          lastPressTime = now;
+        }
+      }
+      previousY = wristY;
+      const elapsed = (now - lastPressTime) / 1000;
+      const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
+
+      if (frequency > 110) {
+        feedback.innerText = `太快了：${Math.round(frequency)} 次/分鐘`;
+        feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+      } else if (frequency < 90) {
+        feedback.innerText = `太慢了：${Math.round(frequency)} 次/分鐘`;
+        feedback.style.backgroundColor = 'rgba(255,165,0,0.7)';
+      } else {
+        feedback.innerText = `完美節奏！${Math.round(frequency)} 次/分鐘`;
+        feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+      }
+
+      canvasCtx.restore();
     });
 
     async function startCamera() {
       try {
+        console.log("開始請求相機權限...");
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = stream;
+
         const camera = new Camera(videoElement, {
           onFrame: async () => {
             await pose.send({ image: videoElement });
@@ -157,16 +152,17 @@
         });
         camera.start();
 
-        // 顯示元件
         startBtn.style.display = 'none';
         videoElement.style.display = 'block';
         canvasElement.style.display = 'block';
         feedback.style.display = 'block';
+        errorBox.style.display = 'none';
 
+        console.log("相機啟動成功！");
       } catch (err) {
-        errorBox.innerText = "⚠️ 錯誤：無法啟動相機";
+        console.error("相機啟動錯誤：", err);
+        errorBox.innerText = "⚠️ 鏡頭啟動失敗，請允許權限或重新整理";
         errorBox.style.display = 'block';
-        console.error(err);
       }
     }
 
