@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -26,6 +25,15 @@
     }
     #info { bottom: 5vh; }
     #rate { top: 2vh; }
+
+    .label {
+      position: absolute;
+      color: yellow;
+      font-size: 24px;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px black;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -55,12 +63,12 @@
     function updateRate() {
       const now = Date.now();
       timestamps.push(now);
-      const windowStart = now - 5000; // 改為5秒
+      const windowStart = now - 2000; // 2 秒內
       timestamps = timestamps.filter(t => t > windowStart);
-      const rate = Math.round((timestamps.length / 5) * 60); // 每分鐘速率
+      const rate = Math.round((timestamps.length / 2) * 60); // 換算每分鐘
 
       rollingRates.push(rate);
-      if (rollingRates.length > 3) rollingRates.shift(); // 滑動平均3次
+      if (rollingRates.length > 3) rollingRates.shift(); // 滑動平均
 
       const avgRate = Math.round(rollingRates.reduce((a, b) => a + b) / rollingRates.length);
 
@@ -73,21 +81,21 @@
       rateDiv.style.color = color;
     }
 
-    function detectCompression(y) {
+    function detectCompression(relativeY) {
       if (prevY === null) {
-        prevY = y;
+        prevY = relativeY;
         return;
       }
-      const delta = y - prevY;
+      const delta = relativeY - prevY;
       if (direction === null) {
         direction = delta > 0 ? 'down' : 'up';
-      } else if (direction === 'down' && delta < -0.015) {
+      } else if (direction === 'down' && delta < -0.01) {
         updateRate();
         direction = 'up';
-      } else if (direction === 'up' && delta > 0.015) {
+      } else if (direction === 'up' && delta > 0.01) {
         direction = 'down';
       }
-      prevY = y;
+      prevY = relativeY;
     }
 
     const pose = new Pose({
@@ -142,6 +150,7 @@
       const pShoulder = toCanvas(shoulder);
       const pHip = toCanvas(hip);
 
+      // 畫紅點
       [pWrist, pShoulder, pHip].forEach(p => {
         ctx.beginPath();
         ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
@@ -149,6 +158,7 @@
         ctx.fill();
       });
 
+      // 連線：手腕 → 肩膀 → 髖關節
       ctx.beginPath();
       ctx.moveTo(pWrist.x, pWrist.y);
       ctx.lineTo(pShoulder.x, pShoulder.y);
@@ -157,7 +167,16 @@
       ctx.lineWidth = 4;
       ctx.stroke();
 
-      detectCompression(shoulder.y);
+      // 加上標示文字
+      ctx.font = '20px bold sans-serif';
+      ctx.fillStyle = 'yellow';
+      ctx.fillText('手腕', pWrist.x + 10, pWrist.y);
+      ctx.fillText('肩膀', pShoulder.x + 10, pShoulder.y);
+      ctx.fillText('髖關節', pHip.x + 10, pHip.y);
+
+      // 用 shoulder 與 hip 高度計算相對壓胸位移
+      const relativeY = shoulder.y - hip.y;
+      detectCompression(relativeY);
     });
 
     async function start() {
