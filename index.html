@@ -1,61 +1,184 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>鏡頭啟動測試</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      body {
-        margin: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        background: black;
-        color: white;
-      }
-      video {
-        width: 100vw;
-        height: auto;
-        display: none;
-        margin-top: 20px;
-      }
-      button {
-        margin-top: 40vh;
-        font-size: 1.5em;
-        padding: 1em 2em;
-        background-color: green;
-        color: white;
-        border: none;
-        border-radius: 10px;
-      }
-      #error {
-        color: red;
-        margin-top: 20px;
-        display: none;
-      }
-    </style>
-  </head>
-  <body>
-    <button id="startBtn">開啟鏡頭測試</button>
-    <video id="video" autoplay playsinline></video>
-    <div id="error">⚠️ 鏡頭無法開啟，請確認權限或瀏覽器支援性</div>
+<head>
+  <title>CPR 偵測系統 V1</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+      font-family: sans-serif;
+    }
+    canvas, video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: none;
+    }
+    #feedback {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 1.8em;
+      padding: 10px 20px;
+      background-color: rgba(0, 0, 0, 0.6);
+      color: white;
+      border-radius: 12px;
+      z-index: 10;
+      display: none;
+    }
+    #startBtn {
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1.5em;
+      padding: 20px 30px;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      z-index: 20;
+    }
+    #error {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 1em;
+      color: red;
+      background: white;
+      padding: 5px 10px;
+      border-radius: 8px;
+      display: none;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="feedback">準備中...</div>
+  <button id="startBtn">開啟鏡頭</button>
+  <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
 
-    <script>
-      const btn = document.getElementById('startBtn');
-      const video = document.getElementById('video');
-      const error = document.getElementById('error');
+  <!-- 外部 MediaPipe 載入會在 JS 動態注入 -->
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const feedback = document.getElementById('feedback');
+    const startBtn = document.getElementById('startBtn');
+    const errorBox = document.getElementById('error');
 
-      btn.addEventListener('click', async () => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-          video.srcObject = stream;
-          video.style.display = 'block';
-          btn.style.display = 'none';
-          error.style.display = 'none';
-        } catch (err) {
-          console.error('錯誤:', err);
-          error.style.display = 'block';
-        }
+    let previousY = null;
+    let lastPressTime = Date.now();
+    let pressCount = 0;
+
+    async function loadScripts() {
+      const poseScript = document.createElement("script");
+      poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+      document.body.appendChild(poseScript);
+
+      const cameraScript = document.createElement("script");
+      cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+      document.body.appendChild(cameraScript);
+
+      return new Promise((resolve) => {
+        cameraScript.onload = () => resolve();
       });
-    </script>
-  </body>
+    }
+
+    async function startSystem() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = stream;
+
+        await loadScripts();  // 等 MediaPipe 載入完成
+
+        const pose = new Pose.Pose({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+          modelComplexity: 0,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        pose.onResults((results) => {
+          if (!results.poseLandmarks) return;
+
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+
+          canvasCtx.save();
+          canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+          for (const landmark of results.poseLandmarks) {
+            canvasCtx.beginPath();
+            canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = "red";
+            canvasCtx.fill();
+          }
+
+          const wristY = results.poseLandmarks[15].y;
+          const now = Date.now();
+          if (previousY !== null) {
+            const dy = previousY - wristY;
+            if (dy > 0.05 && now - lastPressTime > 300) {
+              pressCount++;
+              lastPressTime = now;
+            }
+          }
+          previousY = wristY;
+          const elapsed = (now - lastPressTime) / 1000;
+          const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
+
+          if (frequency > 110) {
+            feedback.innerText = `太快了：${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+          } else if (frequency < 90) {
+            feedback.innerText = `太慢了：${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(255,165,0,0.7)';
+          } else {
+            feedback.innerText = `完美節奏！${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+          }
+
+          canvasCtx.restore();
+        });
+
+        const camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await pose.send({ image: videoElement });
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+
+        // 顯示畫面元素
+        startBtn.style.display = 'none';
+        videoElement.style.display = 'block';
+        canvasElement.style.display = 'block';
+        feedback.style.display = 'block';
+        errorBox.style.display = 'none';
+      } catch (err) {
+        console.error("🚨 無法開啟相機：", err);
+        errorBox.style.display = 'block';
+      }
+    }
+
+    startBtn.addEventListener('click', startSystem);
+  </script>
+</body>
 </html>
