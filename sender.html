@@ -1,25 +1,85 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
-  <meta charset="UTF-8">
-  <title>CPR 鏡頭發送端</title>
+  <meta charset="UTF-8" />
+  <title>CPR 發送端 - 骨架追蹤</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    video, canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      background: rgba(0,0,0,0.6);
+      padding: 10px;
+      border-radius: 10px;
+      z-index: 10;
+    }
+  </style>
 </head>
 <body>
-  <h2>教練端：鏡頭畫面發送中...</h2>
-  <video id="video" autoplay playsinline style="width: 100%; max-width: 600px;"></video>
+  <div id="info">🔴 教練端（後鏡頭）骨架偵測中...</div>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
   <script>
-    const video = document.getElementById('video');
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },  // ✅ 使用後鏡頭！
-          audio: false
-        });
-        video.srcObject = stream;
-      } catch (err) {
-        alert('無法啟動鏡頭：' + err.message);
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+
+    const pose = new window.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+
+    pose.setOptions({
+      modelComplexity: 0,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    pose.onResults((results) => {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.poseLandmarks) {
+        for (const landmark of results.poseLandmarks) {
+          canvasCtx.beginPath();
+          canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 6, 0, 2 * Math.PI);
+          canvasCtx.fillStyle = "red";
+          canvasCtx.fill();
+        }
       }
+    });
+
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false
+      });
+      videoElement.srcObject = stream;
+
+      const camera = new window.Camera(videoElement, {
+        onFrame: async () => {
+          await pose.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480,
+      });
+      camera.start();
     }
+
     startCamera();
   </script>
 </body>
