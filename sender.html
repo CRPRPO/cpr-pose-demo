@@ -1,212 +1,167 @@
+
 <!DOCTYPE html>
-<html lang="zh">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>CPR 鏡頭發送端</title>
+  <title>CPR Pose Detection</title>
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
       position: absolute;
-      top: 0; left: 0;
-      width: 100vw;
-      height: 100vh;
+      left: 0;
+      top: 0;
     }
-    #info, #rate {
+    #sideLabel {
       position: absolute;
+      bottom: 30px;
       left: 50%;
       transform: translateX(-50%);
-      color: white;
-      background: rgba(0, 0, 0, 0.6);
-      padding: 8px 16px;
-      border-radius: 8px;
-      font-size: 80px;
+      font-size: 48px;
+      color: red;
       font-weight: bold;
-      z-index: 10;
     }
-    #info { bottom: 5vh; }
-    #rate { top: 2vh; }
-
-    .label {
+    #rateLabel {
       position: absolute;
-      color: yellow;
-      font-size: 24px;
-      font-weight: bold;
-      text-shadow: 1px 1px 2px black;
-      pointer-events: none;
+      top: 10px;
+      right: 10px;
+      font-size: 36px;
+      color: green;
+      background: white;
+      padding: 8px;
+      border-radius: 10px;
     }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="output"></canvas>
-  <div id="info">準備中...</div>
-  <div id="rate">速率偵測中...</div>
+  <video id="video" width="640" height="480" autoplay muted playsinline></video>
+  <canvas id="output" width="640" height="480"></canvas>
+  <div id="sideLabel"></div>
+  <div id="rateLabel">偵測中...</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
 
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('output');
     const ctx = canvas.getContext('2d');
-    const infoDiv = document.getElementById('info');
-    const rateDiv = document.getElementById('rate');
+    const sideLabel = document.getElementById('sideLabel');
+    const rateLabel = document.getElementById('rateLabel');
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
+    let previousY = null;
     let timestamps = [];
-    let rollingRates = [];
-    let prevY = null;
-    let direction = null;
 
-    function updateRate() {
-      const now = Date.now();
-      timestamps.push(now);
-      const windowStart = now - 2000; // 2 秒內
-      timestamps = timestamps.filter(t => t > windowStart);
-      const rate = Math.round((timestamps.length / 2) * 60); // 換算每分鐘
-
-      rollingRates.push(rate);
-      if (rollingRates.length > 3) rollingRates.shift(); // 滑動平均
-
-      const avgRate = Math.round(rollingRates.reduce((a, b) => a + b) / rollingRates.length);
-
-      let color = 'white';
-      if (avgRate >= 100 && avgRate <= 120) color = 'lime';
-      else if (avgRate >= 80 && avgRate <= 140) color = 'yellow';
-      else color = 'red';
-
-      rateDiv.textContent = `壓胸速率：${avgRate} 下/分鐘`;
-      rateDiv.style.color = color;
-    }
-
-    function detectCompression(relativeY) {
-      if (prevY === null) {
-        prevY = relativeY;
-        return;
-      }
-      const delta = relativeY - prevY;
-      if (direction === null) {
-        direction = delta > 0 ? 'down' : 'up';
-      } else if (direction === 'down' && delta < -0.01) {
-        updateRate();
-        direction = 'up';
-      } else if (direction === 'up' && delta > 0.01) {
-        direction = 'down';
-      }
-      prevY = relativeY;
-    }
-
-    const pose = new Pose({
+    const pose = new Pose.Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
 
     pose.setOptions({
-      modelComplexity: 0,
+      modelComplexity: 1,
       smoothLandmarks: true,
       enableSegmentation: false,
       minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+      minTrackingConfidence: 0.5
     });
 
-    pose.onResults((results) => {
+    pose.onResults(results => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
       if (!results.poseLandmarks) return;
 
       const lm = results.poseLandmarks;
-      const sides = {
-        left: [15, 11, 23],
-        right: [16, 12, 24],
-      };
 
-      let selected = null;
-      let maxVisible = 0;
-      for (const side in sides) {
-        const count = sides[side].filter(i => lm[i].visibility > 0.8).length;
-        if (count > maxVisible) {
-          maxVisible = count;
-          selected = side;
-        }
+      const left = [lm[11], lm[13], lm[15], lm[23]]; // shoulder, elbow, wrist, hip
+      const right = [lm[12], lm[14], lm[16], lm[24]];
+
+      const leftVisible = left.every(p => p.visibility > 0.5);
+      const rightVisible = right.every(p => p.visibility > 0.5);
+
+      let side = '';
+      let points = [];
+
+      if (leftVisible && (!rightVisible || left[0].x < right[0].x)) {
+        side = '左手';
+        points = [left[2], left[0], left[3]]; // wrist, shoulder, hip
+      } else if (rightVisible) {
+        side = '右手';
+        points = [right[2], right[0], right[3]];
+      } else {
+        side = '';
       }
 
-      if (!selected) return;
+      if (points.length > 0) {
+        sideLabel.textContent = side;
 
-      infoDiv.textContent = selected === 'left' ? '左手' : '右手';
-
-      const [wristId, shoulderId, hipId] = sides[selected];
-      const wrist = lm[wristId];
-      const shoulder = lm[shoulderId];
-      const hip = lm[hipId];
-
-      const toCanvas = (p) => ({
-        x: p.x * canvas.width,
-        y: p.y * canvas.height
-      });
-
-      const pWrist = toCanvas(wrist);
-      const pShoulder = toCanvas(shoulder);
-      const pHip = toCanvas(hip);
-
-      // 畫紅點
-      [pWrist, pShoulder, pHip].forEach(p => {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
         ctx.fillStyle = 'red';
-        ctx.fill();
-      });
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 4;
 
-      // 連線：手腕 → 肩膀 → 髖關節
-      ctx.beginPath();
-      ctx.moveTo(pWrist.x, pWrist.y);
-      ctx.lineTo(pShoulder.x, pShoulder.y);
-      ctx.lineTo(pHip.x, pHip.y);
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 4;
-      ctx.stroke();
+        points.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x * canvas.width, p.y * canvas.height, 8, 0, 2 * Math.PI);
+          ctx.fill();
+        });
 
-      // 加上標示文字
-      ctx.font = '20px bold sans-serif';
-      ctx.fillStyle = 'yellow';
-      ctx.fillText('手腕', pWrist.x + 10, pWrist.y);
-      ctx.fillText('肩膀', pShoulder.x + 10, pShoulder.y);
-      ctx.fillText('髖關節', pHip.x + 10, pHip.y);
+        // draw line: wrist -> shoulder -> hip
+        ctx.beginPath();
+        ctx.moveTo(points[0].x * canvas.width, points[0].y * canvas.height);
+        ctx.lineTo(points[1].x * canvas.width, points[1].y * canvas.height);
+        ctx.lineTo(points[2].x * canvas.width, points[2].y * canvas.height);
+        ctx.stroke();
 
-      // 用 shoulder 與 hip 高度計算相對壓胸位移
-      const relativeY = shoulder.y - hip.y;
-      detectCompression(relativeY);
+        // show labels
+        ctx.font = '20px Arial';
+        ctx.fillStyle = 'black';
+        ctx.fillText("手腕", points[0].x * canvas.width + 10, points[0].y * canvas.height);
+        ctx.fillText("肩膀", points[1].x * canvas.width + 10, points[1].y * canvas.height);
+        ctx.fillText("髖關節", points[2].x * canvas.width + 10, points[2].y * canvas.height);
+
+        // calculate rate
+        const shoulderY = points[1].y;
+        const hipY = points[2].y;
+        const diff = shoulderY - hipY;
+
+        const now = performance.now();
+        if (previousY !== null && diff > 0.05 && previousY - shoulderY > 0.015) {
+          timestamps.push(now);
+          if (timestamps.length > 10) timestamps.shift();
+        }
+        previousY = shoulderY;
+
+        // calculate CPR rate
+        const cutoff = now - 2000;
+        const recent = timestamps.filter(t => t > cutoff);
+        const rate = Math.round((recent.length / 2) * 60);
+
+        if (rate < 80 || rate > 130) {
+          rateLabel.style.color = 'red';
+        } else if (rate >= 95 && rate <= 125) {
+          rateLabel.style.color = 'green';
+        } else {
+          rateLabel.style.color = 'orange';
+        }
+
+        rateLabel.textContent = `CPR速率：${rate} 下/分鐘`;
+      }
     });
 
     async function start() {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: 'environment' } },
+        video: { facingMode: { ideal: "environment" } },
         audio: false
       });
       video.srcObject = stream;
 
-      const camera = new Camera(video, {
+      const camera = new Camera.Camera(video, {
         onFrame: async () => {
           await pose.send({ image: video });
         },
         width: 640,
         height: 480
       });
-      camera.try {
-      start();
-    } catch (err) {
-      alert("無法開啟後鏡頭，請檢查瀏覽器權限或裝置支援情況");
-      console.error(err);
-    }
+      camera.start();
     }
 
-    try {
-      start();
-    } catch (err) {
-      alert("無法開啟後鏡頭，請檢查瀏覽器權限或裝置支援情況");
-      console.error(err);
-    }
+    start();
   </script>
 </body>
 </html>
