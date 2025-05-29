@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端修正版</title>
+  <title>CPR 鏡頭發送端</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -33,8 +32,11 @@
   <canvas id="output"></canvas>
   <div id="info">準備中...</div>
   <div id="rate">速率偵測中...</div>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+
+  <!-- 正確引入 MediaPipe 套件 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('output');
@@ -53,7 +55,7 @@
       const now = Date.now();
       timestamps.push(now);
       const windowStart = now - 10000;
-      timestamps = timestamps.filter((t) => t > windowStart);
+      timestamps = timestamps.filter(t => t > windowStart);
       const rate = Math.round((timestamps.length / 10) * 60);
 
       let color = 'white';
@@ -71,7 +73,6 @@
         return;
       }
       const delta = y - prevY;
-
       if (direction === null) {
         direction = delta > 0 ? 'down' : 'up';
       } else if (direction === 'down' && delta < -0.015) {
@@ -80,7 +81,6 @@
       } else if (direction === 'up' && delta > 0.015) {
         direction = 'down';
       }
-
       prevY = y;
     }
 
@@ -136,7 +136,6 @@
       const pShoulder = toCanvas(shoulder);
       const pHip = toCanvas(hip);
 
-      // Draw points
       [pWrist, pShoulder, pHip].forEach(p => {
         ctx.beginPath();
         ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
@@ -144,7 +143,6 @@
         ctx.fill();
       });
 
-      // Draw lines
       ctx.beginPath();
       ctx.moveTo(pWrist.x, pWrist.y);
       ctx.lineTo(pShoulder.x, pShoulder.y);
@@ -158,7 +156,8 @@
 
     async function start() {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
+        video: { facingMode: 'environment' },
+        audio: false
       });
       video.srcObject = stream;
 
