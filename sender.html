@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 單邊追蹤強化版</title>
+  <title>CPR 發送端 - 精簡追蹤版</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -51,8 +51,8 @@
     });
 
     const sides = {
-      left:  { label: '左手', points: [15, 13, 11, 23], names: ['Wrist', 'Elbow', 'Shoulder', 'Hip'] },
-      right: { label: '右手', points: [16, 14, 12, 24], names: ['Wrist', 'Elbow', 'Shoulder', 'Hip'] }
+      left:  { label: '左手', points: [15, 11, 23], names: ['Wrist', 'Shoulder', 'Hip'] },
+      right: { label: '右手', points: [16, 12, 24], names: ['Wrist', 'Shoulder', 'Hip'] }
     };
 
     pose.onResults((results) => {
