@@ -1,24 +1,18 @@
+
 <!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 速率偵測整合版</title>
+  <title>CPR 發送端修正版</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: black;
-    }
-    video,
-    canvas {
+    body { margin: 0; overflow: hidden; background: black; }
+    video, canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      top: 0; left: 0;
       width: 100vw;
       height: 100vh;
     }
-    #info,
-    #rate {
+    #info, #rate {
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
@@ -30,12 +24,8 @@
       font-weight: bold;
       z-index: 10;
     }
-    #info {
-      bottom: 5vh;
-    }
-    #rate {
-      top: 2vh;
-    }
+    #info { bottom: 5vh; }
+    #rate { top: 2vh; }
   </style>
 </head>
 <body>
@@ -43,11 +33,9 @@
   <canvas id="output"></canvas>
   <div id="info">準備中...</div>
   <div id="rate">速率偵測中...</div>
-  <script type="module">
-    import '@mediapipe/pose';
-    import '@mediapipe/camera_utils';
-    import { Pose } from '@mediapipe/pose';
-
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('output');
     const ctx = canvas.getContext('2d');
@@ -87,7 +75,6 @@
       if (direction === null) {
         direction = delta > 0 ? 'down' : 'up';
       } else if (direction === 'down' && delta < -0.015) {
-        // 偵測上升 = 壓胸結束
         updateRate();
         direction = 'up';
       } else if (direction === 'up' && delta > 0.015) {
@@ -97,9 +84,8 @@
       prevY = y;
     }
 
-    const pose = new Pose({
-      locateFile: (file) =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    const pose = new Pose.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
 
     pose.setOptions({
@@ -117,47 +103,48 @@
       if (!results.poseLandmarks) return;
 
       const lm = results.poseLandmarks;
-      const points = [
-        { name: 'left', ids: [15, 11, 23] },
-        { name: 'right', ids: [16, 12, 24] },
-      ];
+      const sides = {
+        left: [15, 11, 23],
+        right: [16, 12, 24],
+      };
 
-      let visibleSide = null;
-      let maxVisible = -1;
-
-      points.forEach((side) => {
-        const count = side.ids.filter((id) => lm[id].visibility > 0.8).length;
+      let selected = null;
+      let maxVisible = 0;
+      for (const side in sides) {
+        const count = sides[side].filter(i => lm[i].visibility > 0.8).length;
         if (count > maxVisible) {
           maxVisible = count;
-          visibleSide = side;
+          selected = side;
         }
-      });
+      }
 
-      if (!visibleSide) return;
+      if (!selected) return;
 
-      const [wristId, shoulderId, hipId] = visibleSide.ids;
+      infoDiv.textContent = selected === 'left' ? '左手' : '右手';
+
+      const [wristId, shoulderId, hipId] = sides[selected];
       const wrist = lm[wristId];
       const shoulder = lm[shoulderId];
       const hip = lm[hipId];
 
       const toCanvas = (p) => ({
         x: p.x * canvas.width,
-        y: p.y * canvas.height,
+        y: p.y * canvas.height
       });
 
       const pWrist = toCanvas(wrist);
       const pShoulder = toCanvas(shoulder);
       const pHip = toCanvas(hip);
 
-      // Draw dots
-      [pWrist, pShoulder, pHip].forEach((p) => {
+      // Draw points
+      [pWrist, pShoulder, pHip].forEach(p => {
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 10, 0, 2 * Math.PI);
+        ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
         ctx.fillStyle = 'red';
         ctx.fill();
       });
 
-      // Draw line: wrist → shoulder → hip
+      // Draw lines
       ctx.beginPath();
       ctx.moveTo(pWrist.x, pWrist.y);
       ctx.lineTo(pShoulder.x, pShoulder.y);
@@ -166,25 +153,21 @@
       ctx.lineWidth = 4;
       ctx.stroke();
 
-      // Show label
-      infoDiv.textContent = visibleSide.name === 'left' ? '左手' : '右手';
-
-      // Trigger compression detection
       detectCompression(shoulder.y);
     });
 
     async function start() {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-        audio: false,
+        video: { facingMode: 'environment' }
       });
       video.srcObject = stream;
-      const camera = new window.Camera(video, {
+
+      const camera = new Camera(video, {
         onFrame: async () => {
           await pose.send({ image: video });
         },
         width: 640,
-        height: 480,
+        height: 480
       });
       camera.start();
     }
