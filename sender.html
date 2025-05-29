@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 精簡骨架追蹤</title>
+  <title>CPR 發送端 - 單邊骨架判斷</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -20,6 +20,7 @@
       padding: 10px;
       border-radius: 10px;
       z-index: 10;
+      font-size: 20px;
     }
   </style>
 </head>
@@ -34,6 +35,7 @@
     const videoElement = document.getElementById('video');
     const canvasElement = document.getElementById('canvas');
     const canvasCtx = canvasElement.getContext('2d');
+    const infoDiv = document.getElementById('info');
 
     const pose = new window.Pose({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -46,16 +48,10 @@
       minTrackingConfidence: 0.5,
     });
 
-    // 要連線的關節對（index 為 MediaPipe landmark 編號）
-    const connections = [
-      [11, 13], [13, 15], // 左肩 → 左肘 → 左手腕
-      [12, 14], [14, 16], // 右肩 → 右肘 → 右手腕
-      [11, 23],           // 左肩 → 左臀
-      [12, 24]            // 右肩 → 右臀
-    ];
-
-    // 要顯示的點
-    const visibleJoints = [11, 12, 13, 14, 15, 16, 23, 24];
+    const sides = {
+      left:  { label: '左手', points: [11, 13, 15, 23] }, // shoulder, elbow, wrist, hip
+      right: { label: '右手', points: [12, 14, 16, 24] }
+    };
 
     pose.onResults((results) => {
       canvasElement.width = videoElement.videoWidth;
@@ -63,31 +59,45 @@
       canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-      if (results.poseLandmarks) {
-        const lm = results.poseLandmarks;
+      if (!results.poseLandmarks) {
+        infoDiv.textContent = "❌ 無偵測到骨架";
+        return;
+      }
 
-        // 連線骨架線條
-        canvasCtx.strokeStyle = "red";
-        canvasCtx.lineWidth = 4;
-        connections.forEach(([start, end]) => {
-          if (lm[start] && lm[end]) {
-            canvasCtx.beginPath();
-            canvasCtx.moveTo(lm[start].x * canvasElement.width, lm[start].y * canvasElement.height);
-            canvasCtx.lineTo(lm[end].x * canvasElement.width, lm[end].y * canvasElement.height);
-            canvasCtx.stroke();
-          }
-        });
+      const lm = results.poseLandmarks;
 
-        // 畫出紅點
-        visibleJoints.forEach((index) => {
-          const landmark = lm[index];
-          if (landmark) {
-            canvasCtx.beginPath();
-            canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 6, 0, 2 * Math.PI);
-            canvasCtx.fillStyle = "red";
-            canvasCtx.fill();
-          }
-        });
+      // 根據存在的點數來判斷要用左側還右側
+      const leftValid = sides.left.points.filter(i => lm[i].visibility > 0.5).length;
+      const rightValid = sides.right.points.filter(i => lm[i].visibility > 0.5).length;
+      const activeSide = leftValid >= rightValid ? sides.left : sides.right;
+
+      // 更新資訊區
+      infoDiv.textContent = `🔴 目前追蹤：${activeSide.label}`;
+
+      // 畫線
+      canvasCtx.strokeStyle = "red";
+      canvasCtx.lineWidth = 4;
+      canvasCtx.beginPath();
+      const pts = activeSide.points.map(i => lm[i]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        if (p1 && p2 && p1.visibility > 0.5 && p2.visibility > 0.5) {
+          canvasCtx.moveTo(p1.x * canvasElement.width, p1.y * canvasElement.height);
+          canvasCtx.lineTo(p2.x * canvasElement.width, p2.y * canvasElement.height);
+        }
+      }
+      canvasCtx.stroke();
+
+      // 畫點
+      for (const i of activeSide.points) {
+        const point = lm[i];
+        if (point.visibility > 0.5) {
+          canvasCtx.beginPath();
+          canvasCtx.arc(point.x * canvasElement.width, point.y * canvasElement.height, 6, 0, 2 * Math.PI);
+          canvasCtx.fillStyle = "red";
+          canvasCtx.fill();
+        }
       }
     });
 
@@ -97,13 +107,12 @@
           video: { facingMode: { exact: 'environment' } }
         });
         videoElement.srcObject = stream;
-
         videoElement.onloadedmetadata = () => {
           videoElement.play();
           detectLoop();
         };
       } catch (err) {
-        document.getElementById('info').textContent = '🚫 無法開啟後鏡頭，請確認權限與設備設定';
+        infoDiv.textContent = '🚫 無法開啟後鏡頭，請確認權限與設備設定';
         console.error(err);
       }
     }
