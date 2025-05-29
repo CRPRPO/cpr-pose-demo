@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 鎖定後鏡頭</title>
+  <title>CPR 發送端 - 精簡骨架追蹤</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -46,6 +46,17 @@
       minTrackingConfidence: 0.5,
     });
 
+    // 要連線的關節對（index 為 MediaPipe landmark 編號）
+    const connections = [
+      [11, 13], [13, 15], // 左肩 → 左肘 → 左手腕
+      [12, 14], [14, 16], // 右肩 → 右肘 → 右手腕
+      [11, 23],           // 左肩 → 左臀
+      [12, 24]            // 右肩 → 右臀
+    ];
+
+    // 要顯示的點
+    const visibleJoints = [11, 12, 13, 14, 15, 16, 23, 24];
+
     pose.onResults((results) => {
       canvasElement.width = videoElement.videoWidth;
       canvasElement.height = videoElement.videoHeight;
@@ -53,12 +64,30 @@
       canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
       if (results.poseLandmarks) {
-        for (const landmark of results.poseLandmarks) {
-          canvasCtx.beginPath();
-          canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 6, 0, 2 * Math.PI);
-          canvasCtx.fillStyle = "red";
-          canvasCtx.fill();
-        }
+        const lm = results.poseLandmarks;
+
+        // 連線骨架線條
+        canvasCtx.strokeStyle = "red";
+        canvasCtx.lineWidth = 4;
+        connections.forEach(([start, end]) => {
+          if (lm[start] && lm[end]) {
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(lm[start].x * canvasElement.width, lm[start].y * canvasElement.height);
+            canvasCtx.lineTo(lm[end].x * canvasElement.width, lm[end].y * canvasElement.height);
+            canvasCtx.stroke();
+          }
+        });
+
+        // 畫出紅點
+        visibleJoints.forEach((index) => {
+          const landmark = lm[index];
+          if (landmark) {
+            canvasCtx.beginPath();
+            canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 6, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = "red";
+            canvasCtx.fill();
+          }
+        });
       }
     });
 
