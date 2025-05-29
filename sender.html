@@ -181,7 +181,7 @@
 
     async function start() {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
+        video: { facingMode: { exact: 'environment' } },
         audio: false
       });
       video.srcObject = stream;
@@ -193,10 +193,20 @@
         width: 640,
         height: 480
       });
-      camera.start();
+      camera.try {
+      start();
+    } catch (err) {
+      alert("無法開啟後鏡頭，請檢查瀏覽器權限或裝置支援情況");
+      console.error(err);
+    }
     }
 
-    start();
+    try {
+      start();
+    } catch (err) {
+      alert("無法開啟後鏡頭，請檢查瀏覽器權限或裝置支援情況");
+      console.error(err);
+    }
   </script>
 </body>
 </html>
