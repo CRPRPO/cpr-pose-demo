@@ -1,27 +1,133 @@
-
 <!DOCTYPE html>
 <html lang="zh">
 <head>
-  <meta charset="UTF-8">
-  <title>測試鏡頭頁面</title>
+  <meta charset="UTF-8" />
+  <title>CPR 鏡頭發送端</title>
+  <style>
+    body { margin: 0; background: black; color: white; font-size: 20px; text-align: center; }
+    canvas, video { position: absolute; top: 0; left: 0; transform: scaleX(-1); }
+    #status { position: fixed; top: 20px; left: 20px; background: red; padding: 5px 10px; border-radius: 8px; font-size: 18px; }
+    #sideLabel { position: fixed; top: 20px; right: 20px; background: black; color: white; font-size: 28px; }
+    #fps { position: fixed; bottom: 20px; left: 20px; color: lightgreen; font-size: 24px; }
+  </style>
 </head>
 <body>
-  <h1>測試鏡頭是否可啟動</h1>
-  <video id="video" autoplay playsinline style="width: 100%; max-width: 600px;"></video>
-  <script>
+  <div id="status">鏡頭啟動中...</div>
+  <div id="sideLabel">準備中...</div>
+  <div id="fps">速率偵測中...</div>
+  <video id="video" autoplay playsinline style="display: none;"></video>
+  <canvas id="canvas"></canvas>
+
+  <script type="module">
+    import '@mediapipe/pose';
+    import { Pose } from '@mediapipe/pose';
+    import { Camera } from '@mediapipe/camera_utils';
+    import * as drawingUtils from '@mediapipe/drawing_utils';
+
     const video = document.getElementById('video');
-    async function startCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
-          audio: false
-        });
-        video.srcObject = stream;
-      } catch (err) {
-        alert("無法啟動鏡頭：" + err.message);
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const statusDiv = document.getElementById('status');
+    const sideLabel = document.getElementById('sideLabel');
+    const fpsLabel = document.getElementById('fps');
+
+    let lastY = null;
+    let count = 0;
+    let lastTime = Date.now();
+    let downwards = false;
+
+    function detectCompressionRate(wrist) {
+      if (!wrist) return;
+      const y = wrist.y;
+      if (lastY === null) {
+        lastY = y;
+        return;
       }
+
+      const dy = y - lastY;
+      const now = Date.now();
+
+      if (dy > 0.01 && !downwards) {
+        downwards = true;
+        count++;
+      } else if (dy < -0.01 && downwards) {
+        downwards = false;
+      }
+
+      if (now - lastTime >= 5000) {
+        const rate = count * 12;
+        fpsLabel.innerText = `目前速率：約 ${rate} 次/分鐘`;
+        count = 0;
+        lastTime = now;
+      }
+
+      lastY = y;
     }
-    startCamera();
+
+    function drawConnection(points, color) {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x * canvas.width, points[0].y * canvas.height);
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x * canvas.width, points[i].y * canvas.height);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 6;
+      ctx.stroke();
+    }
+
+    const pose = new Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    pose.onResults(results => {
+      if (!results.poseLandmarks) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      const lm = results.poseLandmarks;
+      const left = [lm[11], lm[13], lm[15], lm[23]];
+      const right = [lm[12], lm[14], lm[16], lm[24]];
+
+      const leftScore = left.every(p => p.visibility > 0.5);
+      const rightScore = right.every(p => p.visibility > 0.5);
+
+      const tracking = rightScore && !leftScore ? '右手' : '左手';
+      const joints = tracking === '左手' ? left : right;
+      sideLabel.innerText = `目前追蹤：${tracking}`;
+      drawConnection([joints[0], joints[2], joints[3]], 'red');
+      joints.forEach(pt => {
+        ctx.beginPath();
+        ctx.arc(pt.x * canvas.width, pt.y * canvas.height, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+      });
+
+      detectCompressionRate(joints[1]); // wrist
+    });
+
+    const camera = new Camera(video, {
+      onFrame: async () => await pose.send({ image: video }),
+      facingMode: 'environment',
+      width: 640,
+      height: 480
+    });
+
+    camera.start().then(() => {
+      statusDiv.innerText = '✅ 鏡頭啟動成功';
+    }).catch(err => {
+      statusDiv.innerText = '❌ 鏡頭啟動失敗';
+      console.error(err);
+    });
   </script>
 </body>
 </html>
