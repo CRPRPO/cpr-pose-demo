@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>CPR 動作偵測初步測試</title>
+    <title>CPR 動作偵測與即時回饋</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       canvas, video {
@@ -10,13 +10,24 @@
         width: 100%;
         height: auto;
       }
+      #feedback {
+        position: absolute;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 2em;
+        padding: 10px 20px;
+        background-color: rgba(0,0,0,0.6);
+        color: white;
+        border-radius: 10px;
+      }
     </style>
   </head>
   <body>
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
+    <div id="feedback">準備中...</div>
 
-    <!-- MediaPipe Pose -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -24,11 +35,14 @@
       const videoElement = document.getElementById('video');
       const canvasElement = document.getElementById('canvas');
       const canvasCtx = canvasElement.getContext('2d');
+      const feedback = document.getElementById('feedback');
+
+      let previousY = null;
+      let lastPressTime = Date.now();
+      let pressCount = 0;
 
       const pose = new Pose.Pose({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`;
-        }
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
       });
 
       pose.setOptions({
@@ -51,6 +65,35 @@
             canvasCtx.fillStyle = "red";
             canvasCtx.fill();
           }
+
+          const wristY = results.poseLandmarks[15].y;
+          const now = Date.now();
+
+          if (previousY !== null) {
+            const dy = previousY - wristY;
+            if (dy > 0.05 && now - lastPressTime > 300) {
+              pressCount++;
+              lastPressTime = now;
+            }
+          }
+          previousY = wristY;
+
+          const elapsed = (now - lastPressTime) / 1000;
+          const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
+
+          if (frequency > 110) {
+            feedback.innerText = `太快了：${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+          } else if (frequency < 90) {
+            feedback.innerText = `太慢了：${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(255,165,0,0.7)';
+          } else {
+            feedback.innerText = `完美節奏！${Math.round(frequency)} 次/分鐘`;
+            feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+          }
+        } else {
+          feedback.innerText = "請對準身體";
+          feedback.style.backgroundColor = 'rgba(0,0,0,0.5)';
         }
         canvasCtx.restore();
       });
