@@ -101,7 +101,7 @@
         videoElement.srcObject = stream;
         await loadScripts();
 
-        const pose = new Pose.Pose({
+        const pose = new window.Pose({
           locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
         });
 
