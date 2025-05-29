@@ -1,64 +1,111 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>CPR 動作偵測與即時回饋</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      canvas, video {
-        position: absolute;
-        left: 0; top: 0;
-        width: 100%;
-        height: auto;
-      }
-      #feedback {
-        position: absolute;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 2em;
-        padding: 10px 20px;
-        background-color: rgba(0,0,0,0.6);
-        color: white;
-        border-radius: 10px;
-      }
-    </style>
-  </head>
-  <body>
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-    <div id="feedback">準備中...</div>
+<head>
+  <title>CPR 即時偵測（點擊啟動鏡頭）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: none;
+    }
+    #feedback {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 1.8em;
+      background-color: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 10px;
+      z-index: 10;
+      display: none;
+    }
+    #startBtn {
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 30px;
+      font-size: 1.5em;
+      background-color: #28a745;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      z-index: 20;
+    }
+    #error {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 1em;
+      color: red;
+      background: white;
+      padding: 5px 10px;
+      border-radius: 8px;
+      display: none;
+      z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="feedback">準備中...</div>
+  <button id="startBtn">開啟鏡頭</button>
+  <div id="error">⚠️ 鏡頭未啟動，請確認權限</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-    <script>
-      const videoElement = document.getElementById('video');
-      const canvasElement = document.getElementById('canvas');
-      const canvasCtx = canvasElement.getContext('2d');
-      const feedback = document.getElementById('feedback');
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const feedback = document.getElementById('feedback');
+    const startBtn = document.getElementById('startBtn');
+    const errorBox = document.getElementById('error');
 
-      let previousY = null;
-      let lastPressTime = Date.now();
-      let pressCount = 0;
+    let previousY = null;
+    let lastPressTime = Date.now();
+    let pressCount = 0;
 
-      const pose = new Pose.Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-      });
+    function resizeCanvas() {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+    }
 
-      pose.setOptions({
-        modelComplexity: 0,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+    const pose = new Pose.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
 
-      pose.onResults((results) => {
+    pose.setOptions({
+      modelComplexity: 0,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    pose.onResults((results) => {
+      if (results.image.width > 0) {
+        resizeCanvas();
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
         if (results.poseLandmarks) {
+          errorBox.style.display = 'none';
           for (const landmark of results.poseLandmarks) {
             canvasCtx.beginPath();
             canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
@@ -68,7 +115,6 @@
 
           const wristY = results.poseLandmarks[15].y;
           const now = Date.now();
-
           if (previousY !== null) {
             const dy = previousY - wristY;
             if (dy > 0.05 && now - lastPressTime > 300) {
@@ -77,7 +123,6 @@
             }
           }
           previousY = wristY;
-
           const elapsed = (now - lastPressTime) / 1000;
           const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
 
@@ -96,16 +141,36 @@
           feedback.style.backgroundColor = 'rgba(0,0,0,0.5)';
         }
         canvasCtx.restore();
-      });
+      } else {
+        errorBox.style.display = 'block';
+      }
+    });
 
-      const camera = new Camera(videoElement, {
-        onFrame: async () => {
-          await pose.send({ image: videoElement });
-        },
-        width: 640,
-        height: 480
-      });
-      camera.start();
-    </script>
-  </body>
+    async function startCamera() {
+      try {
+        const camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await pose.send({ image: videoElement });
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+
+        // 顯示元件
+        startBtn.style.display = 'none';
+        videoElement.style.display = 'block';
+        canvasElement.style.display = 'block';
+        feedback.style.display = 'block';
+
+      } catch (err) {
+        errorBox.innerText = "⚠️ 錯誤：無法啟動相機";
+        errorBox.style.display = 'block';
+        console.error(err);
+      }
+    }
+
+    startBtn.addEventListener('click', startCamera);
+  </script>
+</body>
 </html>
