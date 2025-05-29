@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 發送端 - 精準單邊骨架偵測</title>
+  <title>CPR 發送端 - 單邊追蹤強化版</title>
   <style>
     body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
@@ -13,20 +13,21 @@
     }
     #info {
       position: absolute;
-      bottom: 20px;
+      bottom: 5vh;
       left: 50%;
       transform: translateX(-50%);
       color: white;
-      background: rgba(0,0,0,0.7);
-      padding: 12px 20px;
-      border-radius: 12px;
-      font-size: 24px;
+      background: rgba(0,0,0,0.8);
+      padding: 20px 40px;
+      border-radius: 20px;
+      font-size: 80px;
+      font-weight: bold;
       z-index: 10;
     }
   </style>
 </head>
 <body>
-  <div id="info">🔴 正在判斷中...</div>
+  <div id="info">🔴 正在偵測中...</div>
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
 
@@ -50,8 +51,8 @@
     });
 
     const sides = {
-      left:  { label: '左手', points: [11, 13, 15, 23], names: ['Shoulder', 'Elbow', 'Wrist', 'Hip'] },
-      right: { label: '右手', points: [12, 14, 16, 24], names: ['Shoulder', 'Elbow', 'Wrist', 'Hip'] }
+      left:  { label: '左手', points: [15, 13, 11, 23], names: ['Wrist', 'Elbow', 'Shoulder', 'Hip'] },
+      right: { label: '右手', points: [16, 14, 12, 24], names: ['Wrist', 'Elbow', 'Shoulder', 'Hip'] }
     };
 
     pose.onResults((results) => {
@@ -71,7 +72,7 @@
       const rightValid = sides.right.points.filter(i => lm[i].visibility > 0.8).length;
       const activeSide = leftValid >= rightValid ? sides.left : sides.right;
 
-      infoDiv.textContent = `🔴 目前追蹤：${activeSide.label}`;
+      infoDiv.textContent = activeSide.label;
 
       // 畫線
       canvasCtx.strokeStyle = "red";
@@ -101,9 +102,9 @@
           canvasCtx.fillStyle = "red";
           canvasCtx.fill();
 
-          canvasCtx.font = "18px Arial";
+          canvasCtx.font = "20px Arial";
           canvasCtx.fillStyle = "white";
-          canvasCtx.fillText(label, x + 8, y - 8);
+          canvasCtx.fillText(label, x + 10, y - 10);
         }
       }
     });
@@ -119,7 +120,7 @@
           detectLoop();
         };
       } catch (err) {
-        infoDiv.textContent = '🚫 無法啟用後鏡頭，請檢查相機權限';
+        infoDiv.textContent = '🚫 無法啟用後鏡頭，請確認權限';
         console.error(err);
       }
     }
