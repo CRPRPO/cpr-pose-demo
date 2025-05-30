@@ -2,98 +2,137 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 後鏡頭追蹤</title>
+  <title>CPR 發送端 - 精準單邊骨架偵測</title>
   <style>
-    body {
-      margin: 0;
-      background: black;
-      color: white;
-      font-family: sans-serif;
-      overflow: hidden;
-    }
+    body { margin: 0; overflow: hidden; background: black; }
     video, canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
     }
-    #side-label {
+    #info {
       position: absolute;
       bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
-      font-size: 48px;
-      font-weight: bold;
-      background: rgba(0,0,0,0.5);
-      padding: 10px 20px;
-      border-radius: 10px;
+      color: white;
+      background: rgba(0,0,0,0.7);
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 24px;
+      z-index: 10;
     }
   </style>
 </head>
 <body>
+  <div id="info">🔴 正在判斷中...</div>
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
-  <div id="side-label">準備中...</div>
 
-  <script type="module">
-    import { Pose } from "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.mjs";
-    import { drawConnectors, drawLandmarks } from "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.mjs";
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const label = document.getElementById("side-label");
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const infoDiv = document.getElementById('info');
 
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { exact: "environment" } },
-      audio: false
-    }).then(stream => {
-      video.srcObject = stream;
-    }).catch(err => {
-      label.textContent = "鏡頭啟動失敗：" + err.message;
-    });
-
-    const pose = new Pose({
-      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
+    const pose = new window.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
 
     pose.setOptions({
-      modelComplexity: 1,
+      modelComplexity: 0,
       smoothLandmarks: true,
-      enableSegmentation: false,
       minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
+      minTrackingConfidence: 0.5,
     });
 
-    pose.onResults(results => {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const sides = {
+      left:  { label: '左手', points: [11, 13, 15, 23], names: ['Shoulder', 'Elbow', 'Wrist', 'Hip'] },
+      right: { label: '右手', points: [12, 14, 16, 24], names: ['Shoulder', 'Elbow', 'Wrist', 'Hip'] }
+    };
 
-      if (!results.poseLandmarks) return;
+    pose.onResults((results) => {
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (!results.poseLandmarks) {
+        infoDiv.textContent = "❌ 無法偵測骨架";
+        return;
+      }
 
       const lm = results.poseLandmarks;
-      const leftScore = lm[11].visibility;
-      const rightScore = lm[12].visibility;
-      const side = leftScore > rightScore ? "左手" : "右手";
-      label.textContent = side;
 
-      const idx = side === "左手"
-        ? { shoulder: 11, wrist: 15, hip: 23 }
-        : { shoulder: 12, wrist: 16, hip: 24 };
+      const leftValid = sides.left.points.filter(i => lm[i].visibility > 0.8).length;
+      const rightValid = sides.right.points.filter(i => lm[i].visibility > 0.8).length;
+      const activeSide = leftValid >= rightValid ? sides.left : sides.right;
 
-      const points = [lm[idx.wrist], lm[idx.shoulder], lm[idx.hip]];
-      drawLandmarks(ctx, points, { color: "red", lineWidth: 4 });
-      drawConnectors(ctx, [points[0], points[1]], { color: "red", lineWidth: 4 });
-      drawConnectors(ctx, [points[1], points[2]], { color: "red", lineWidth: 4 });
+      infoDiv.textContent = `🔴 目前追蹤：${activeSide.label}`;
+
+      // 畫線
+      canvasCtx.strokeStyle = "red";
+      canvasCtx.lineWidth = 4;
+      canvasCtx.beginPath();
+      const pts = activeSide.points.map(i => lm[i]);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        if (p1 && p2 && p1.visibility > 0.8 && p2.visibility > 0.8) {
+          canvasCtx.moveTo(p1.x * canvasElement.width, p1.y * canvasElement.height);
+          canvasCtx.lineTo(p2.x * canvasElement.width, p2.y * canvasElement.height);
+        }
+      }
+      canvasCtx.stroke();
+
+      // 畫點與標籤
+      for (let i = 0; i < activeSide.points.length; i++) {
+        const index = activeSide.points[i];
+        const point = lm[index];
+        const label = activeSide.names[i];
+        if (point.visibility > 0.8) {
+          const x = point.x * canvasElement.width;
+          const y = point.y * canvasElement.height;
+          canvasCtx.beginPath();
+          canvasCtx.arc(x, y, 6, 0, 2 * Math.PI);
+          canvasCtx.fillStyle = "red";
+          canvasCtx.fill();
+
+          canvasCtx.font = "18px Arial";
+          canvasCtx.fillStyle = "white";
+          canvasCtx.fillText(label, x + 8, y - 8);
+        }
+      }
     });
 
-    video.addEventListener("loadeddata", async () => {
-      const loop = async () => {
-        await pose.send({ image: video });
-        requestAnimationFrame(loop);
+    async function startCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'environment' } }
+        });
+        videoElement.srcObject = stream;
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          detectLoop();
+        };
+      } catch (err) {
+        infoDiv.textContent = '🚫 無法啟用後鏡頭，請檢查相機權限';
+        console.error(err);
+      }
+    }
+
+    async function detectLoop() {
+      const sendFrame = async () => {
+        await pose.send({ image: videoElement });
+        requestAnimationFrame(sendFrame);
       };
-      loop();
-    });
+      sendFrame();
+    }
+
+    startCamera();
   </script>
 </body>
 </html>
