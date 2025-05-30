@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 鏡頭發送端</title>
+  <title>CPR 後鏡頭追蹤</title>
   <style>
     body {
       margin: 0;
@@ -27,95 +27,30 @@
       padding: 10px 20px;
       border-radius: 10px;
     }
-    #status {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      font-size: 20px;
-      color: #0f0;
-    }
-    #ready {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      font-size: 24px;
-      color: white;
-    }
-    #error {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      font-size: 16px;
-      color: red;
-      background: black;
-    }
   </style>
 </head>
 <body>
-  <video id="video" playsinline style="display: none;"></video>
-  <canvas id="output"></canvas>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
   <div id="side-label">準備中...</div>
-  <div id="status">速率偵測中...</div>
-  <div id="ready">準備中...</div>
-  <div id="error"></div>
 
   <script type="module">
-    import { Pose } from 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.mjs';
-    import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.mjs';
+    import { Pose } from "https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.mjs";
+    import { drawConnectors, drawLandmarks } from "https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.mjs";
 
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('output');
-    const canvasCtx = canvasElement.getContext('2d');
-    const label = document.getElementById('side-label');
-    const status = document.getElementById('status');
-    const ready = document.getElementById('ready');
-    const errorBox = document.getElementById('error');
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const label = document.getElementById("side-label");
 
-    let lastY = null;
-    let lastTime = null;
-    let rates = [];
-
-    function getSide(results) {
-      const leftScore = results.poseLandmarks[11].visibility;
-      const rightScore = results.poseLandmarks[12].visibility;
-      return leftScore > rightScore ? 'left' : 'right';
-    }
-
-    function drawPoint(p) {
-      canvasCtx.beginPath();
-      canvasCtx.arc(p.x * canvasElement.width, p.y * canvasElement.height, 6, 0, 2 * Math.PI);
-      canvasCtx.fillStyle = 'red';
-      canvasCtx.fill();
-    }
-
-    function drawLine(p1, p2) {
-      canvasCtx.beginPath();
-      canvasCtx.moveTo(p1.x * canvasElement.width, p1.y * canvasElement.height);
-      canvasCtx.lineTo(p2.x * canvasElement.width, p2.y * canvasElement.height);
-      canvasCtx.strokeStyle = 'red';
-      canvasCtx.lineWidth = 5;
-      canvasCtx.stroke();
-    }
-
-    function smoothRate(rate) {
-      rates.push(rate);
-      if (rates.length > 6) rates.shift();
-      return Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
-    }
-
-    function updateRate(currentY, timestamp) {
-      if (lastY !== null && lastTime !== null) {
-        const dy = currentY - lastY;
-        const dt = (timestamp - lastTime) / 1000;
-        if (Math.abs(dy) > 0.02 && dt > 0.2) {
-          const rate = 60 / dt;
-          const smooth = smoothRate(rate);
-          status.textContent = `速率：約 ${smooth} 下/分鐘`;
-        }
-      }
-      lastY = currentY;
-      lastTime = timestamp;
-    }
+    navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: "environment" } },
+      audio: false
+    }).then(stream => {
+      video.srcObject = stream;
+    }).catch(err => {
+      label.textContent = "鏡頭啟動失敗：" + err.message;
+    });
 
     const pose = new Pose({
       locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
@@ -130,46 +65,34 @@
     });
 
     pose.onResults(results => {
-      canvasElement.width = videoElement.videoWidth;
-      canvasElement.height = videoElement.videoHeight;
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
       if (!results.poseLandmarks) return;
 
-      const landmarks = results.poseLandmarks;
-      const side = getSide(results);
+      const lm = results.poseLandmarks;
+      const leftScore = lm[11].visibility;
+      const rightScore = lm[12].visibility;
+      const side = leftScore > rightScore ? "左手" : "右手";
+      label.textContent = side;
 
-      const indices = {
-        left: { shoulder: 11, wrist: 15, hip: 23 },
-        right: { shoulder: 12, wrist: 16, hip: 24 }
-      }[side];
+      const idx = side === "左手"
+        ? { shoulder: 11, wrist: 15, hip: 23 }
+        : { shoulder: 12, wrist: 16, hip: 24 };
 
-      const shoulder = landmarks[indices.shoulder];
-      const wrist = landmarks[indices.wrist];
-      const hip = landmarks[indices.hip];
-
-      if (shoulder && wrist && hip) {
-        drawPoint(shoulder);
-        drawPoint(wrist);
-        drawPoint(hip);
-        drawLine(shoulder, wrist);
-        drawLine(wrist, hip);
-        label.textContent = side === 'left' ? '左手' : '右手';
-        updateRate(wrist.y, performance.now());
-      }
+      const points = [lm[idx.wrist], lm[idx.shoulder], lm[idx.hip]];
+      drawLandmarks(ctx, points, { color: "red", lineWidth: 4 });
+      drawConnectors(ctx, [points[0], points[1]], { color: "red", lineWidth: 4 });
+      drawConnectors(ctx, [points[1], points[2]], { color: "red", lineWidth: 4 });
     });
 
-    const camera = new Camera(videoElement, {
-      onFrame: async () => {
-        await pose.send({ image: videoElement });
-      },
-      width: 640,
-      height: 480
-    });
-
-    camera.start().then(() => {
-      ready.textContent = '';
-    }).catch(err => {
-      errorBox.textContent = '⚠️ 鏡頭啟動失敗：' + err.message;
+    video.addEventListener("loadeddata", async () => {
+      const loop = async () => {
+        await pose.send({ image: video });
+        requestAnimationFrame(loop);
+      };
+      loop();
     });
   </script>
 </body>
