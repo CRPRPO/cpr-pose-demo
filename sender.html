@@ -1,189 +1,178 @@
+
 <!DOCTYPE html>
 <html lang="zh">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 鏡頭發送端</title>
+  <title>CPR 發送端修正版</title>
   <style>
-    body {
-      margin: 0;
-      background: black;
-      color: white;
-      font-family: sans-serif;
-      overflow: hidden;
-    }
-    canvas {
+    body { margin: 0; overflow: hidden; background: black; }
+    video, canvas {
       position: absolute;
-      top: 0;
-      left: 0;
+      top: 0; left: 0;
+      width: 100vw;
+      height: 100vh;
     }
-    #video {
-      transform: scaleX(-1);
-      display: none;
-    }
-    #side-label {
+    #info, #rate {
       position: absolute;
-      bottom: 20px;
       left: 50%;
       transform: translateX(-50%);
-      font-size: 48px;
-      font-weight: bold;
-      background: rgba(0,0,0,0.5);
-      padding: 10px 20px;
-      border-radius: 10px;
-    }
-    #status {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      font-size: 20px;
-      color: #0f0;
-    }
-    #ready {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      font-size: 24px;
       color: white;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 80px;
+      font-weight: bold;
+      z-index: 10;
     }
-    #error {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      font-size: 16px;
-      color: red;
-      background: black;
-    }
+    #info { bottom: 5vh; }
+    #rate { top: 2vh; }
   </style>
 </head>
 <body>
-  <video id="video" autoplay playsinline></video>
-  <canvas id="canvas"></canvas>
-  <div id="side-label">準備中...</div>
-  <div id="status">速率偵測中...</div>
-  <div id="ready">準備中...</div>
-  <div id="error"></div>
-
-  <script type="module">
-    import { Pose } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3';
-
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="output"></canvas>
+  <div id="info">準備中...</div>
+  <div id="rate">速率偵測中...</div>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script>
     const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
+    const canvas = document.getElementById('output');
     const ctx = canvas.getContext('2d');
-    const label = document.getElementById('side-label');
-    const status = document.getElementById('status');
-    const ready = document.getElementById('ready');
-    const errorBox = document.getElementById('error');
+    const infoDiv = document.getElementById('info');
+    const rateDiv = document.getElementById('rate');
 
-    let detector;
-    let lastWristY = null;
-    let lastTimestamp = null;
-    let rates = [];
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
 
-    async function initCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false
-        });
-        video.srcObject = stream;
-        return new Promise(resolve => {
-          video.onloadedmetadata = () => {
-            video.play();
-            resolve();
-          };
-        });
-      } catch (err) {
-        errorBox.textContent = '鏡頭啟動失敗：' + err.message;
+    let timestamps = [];
+    let prevY = null;
+    let direction = null;
+
+    function updateRate() {
+      const now = Date.now();
+      timestamps.push(now);
+      const windowStart = now - 10000;
+      timestamps = timestamps.filter((t) => t > windowStart);
+      const rate = Math.round((timestamps.length / 10) * 60);
+
+      let color = 'white';
+      if (rate >= 100 && rate <= 120) color = 'lime';
+      else if (rate >= 80 && rate <= 140) color = 'yellow';
+      else color = 'red';
+
+      rateDiv.textContent = `壓胸速率：${rate} 下/分鐘`;
+      rateDiv.style.color = color;
+    }
+
+    function detectCompression(y) {
+      if (prevY === null) {
+        prevY = y;
+        return;
       }
-    }
+      const delta = y - prevY;
 
-    async function initPose() {
-      const vision = await Pose.createFromOptions(Pose.SupportedModels.BlazePose, {
-        runtime: 'mediapipe',
-        modelType: 'full',
-        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose'
-      });
-      return vision;
-    }
-
-    function drawLine(p1, p2) {
-      ctx.beginPath();
-      ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
-      ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
-      ctx.strokeStyle = 'red';
-      ctx.lineWidth = 5;
-      ctx.stroke();
-    }
-
-    function drawPoint(p) {
-      ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, 6, 0, 2 * Math.PI);
-      ctx.fillStyle = 'red';
-      ctx.fill();
-    }
-
-    function detectSide(keypoints) {
-      const left = keypoints.find(p => p.name === 'left_shoulder');
-      const right = keypoints.find(p => p.name === 'right_shoulder');
-      return left.score > right.score ? 'left' : 'right';
-    }
-
-    function smoothRate(rate) {
-      rates.push(rate);
-      if (rates.length > 6) rates.shift();
-      const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
-      return Math.round(avg);
-    }
-
-    function updateRate(nowY, timestamp) {
-      if (lastWristY !== null && lastTimestamp !== null) {
-        const dy = nowY - lastWristY;
-        const dt = (timestamp - lastTimestamp) / 1000; // 秒
-        if (Math.abs(dy) > 0.02 && dt > 0.2) {
-          const rate = 60 / dt;
-          const smooth = smoothRate(rate);
-          status.textContent = `速率：約 ${smooth} 下/分鐘`;
-        }
+      if (direction === null) {
+        direction = delta > 0 ? 'down' : 'up';
+      } else if (direction === 'down' && delta < -0.015) {
+        updateRate();
+        direction = 'up';
+      } else if (direction === 'up' && delta > 0.015) {
+        direction = 'down';
       }
-      lastWristY = nowY;
-      lastTimestamp = timestamp;
+
+      prevY = y;
     }
 
-    async function render() {
-      if (!detector) return;
-      const pose = await detector.estimatePoses(video);
+    const pose = new Pose.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+
+    pose.setOptions({
+      modelComplexity: 0,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    pose.onResults((results) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (pose && pose.length > 0) {
-        const kps = pose[0].keypoints;
-        const side = detectSide(kps);
-        label.textContent = side === 'left' ? '左手' : '右手';
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-        const shoulder = kps.find(p => p.name === `${side}_shoulder`);
-        const wrist = kps.find(p => p.name === `${side}_wrist`);
-        const hip = kps.find(p => p.name === `${side}_hip`);
+      if (!results.poseLandmarks) return;
 
-        if (shoulder && wrist && hip && shoulder.score > 0.5 && wrist.score > 0.5 && hip.score > 0.5) {
-          drawPoint(shoulder);
-          drawPoint(wrist);
-          drawPoint(hip);
-          drawLine(shoulder, wrist);
-          drawLine(wrist, hip);
-          updateRate(wrist.y, performance.now());
+      const lm = results.poseLandmarks;
+      const sides = {
+        left: [15, 11, 23],
+        right: [16, 12, 24],
+      };
+
+      let selected = null;
+      let maxVisible = 0;
+      for (const side in sides) {
+        const count = sides[side].filter(i => lm[i].visibility > 0.8).length;
+        if (count > maxVisible) {
+          maxVisible = count;
+          selected = side;
         }
       }
-      requestAnimationFrame(render);
+
+      if (!selected) return;
+
+      infoDiv.textContent = selected === 'left' ? '左手' : '右手';
+
+      const [wristId, shoulderId, hipId] = sides[selected];
+      const wrist = lm[wristId];
+      const shoulder = lm[shoulderId];
+      const hip = lm[hipId];
+
+      const toCanvas = (p) => ({
+        x: p.x * canvas.width,
+        y: p.y * canvas.height
+      });
+
+      const pWrist = toCanvas(wrist);
+      const pShoulder = toCanvas(shoulder);
+      const pHip = toCanvas(hip);
+
+      // Draw points
+      [pWrist, pShoulder, pHip].forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+      });
+
+      // Draw lines
+      ctx.beginPath();
+      ctx.moveTo(pWrist.x, pWrist.y);
+      ctx.lineTo(pShoulder.x, pShoulder.y);
+      ctx.lineTo(pHip.x, pHip.y);
+      ctx.strokeStyle = 'red';
+      ctx.lineWidth = 4;
+      ctx.stroke();
+
+      detectCompression(shoulder.y);
+    });
+
+    async function start() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      });
+      video.srcObject = stream;
+
+      const camera = new Camera(video, {
+        onFrame: async () => {
+          await pose.send({ image: video });
+        },
+        width: 640,
+        height: 480
+      });
+      camera.start();
     }
 
-    async function main() {
-      await initCamera();
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      detector = await initPose();
-      ready.textContent = '';
-      render();
-    }
-
-    main();
+    start();
   </script>
 </body>
 </html>
