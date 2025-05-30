@@ -16,20 +16,6 @@
       top: 0;
       left: 0;
     }
-    #status {
-      position: absolute;
-      top: 1em;
-      left: 1em;
-      color: red;
-      font-size: 16px;
-    }
-    #fps {
-      position: absolute;
-      bottom: 1em;
-      left: 1em;
-      font-size: 16px;
-      color: #00ff88;
-    }
     #sideLabel {
       position: absolute;
       bottom: 1em;
@@ -44,8 +30,6 @@
 <body>
   <video id="video" autoplay playsinline style="display:none;"></video>
   <canvas id="canvas"></canvas>
-  <div id="status">鏡頭啟動中...</div>
-  <div id="fps">速率偵測中...</div>
   <div id="sideLabel">準備中...</div>
 
   <script type="module">
@@ -55,8 +39,6 @@
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    const statusDiv = document.getElementById('status');
-    const fpsDiv = document.getElementById('fps');
     const sideLabel = document.getElementById('sideLabel');
 
     navigator.mediaDevices.getUserMedia({
@@ -67,10 +49,9 @@
       video.onloadedmetadata = () => {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        statusDiv.innerText = "準備中...";
       };
     }).catch((err) => {
-      statusDiv.innerText = "錯誤：" + err.message;
+      sideLabel.innerText = "錯誤：" + err.message;
     });
 
     const pose = new Pose({
@@ -90,10 +71,6 @@
     });
     camera.start();
 
-    let lastY = null;
-    let timestamps = [];
-    let rates = [];
-
     function onResults(results) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
@@ -110,29 +87,11 @@
       drawPoint(wrist, "red");
       drawPoint(shoulder, "red");
       drawPoint(hip, "red");
+
       drawLine(wrist, shoulder, "red");
       drawLine(shoulder, hip, "red");
 
-      // 顯示左右手標籤
       sideLabel.innerText = side;
-
-      // 計算速率
-      const now = Date.now();
-      if (lastY !== null) {
-        const deltaY = wrist.y - lastY;
-        if (Math.abs(deltaY) > 0.01) {
-          timestamps.push(now);
-        }
-      }
-      lastY = wrist.y;
-
-      timestamps = timestamps.filter(t => now - t < 2000); // 2秒內
-      const rate = timestamps.length * 30;
-      rates.push(rate);
-      if (rates.length > 3) rates.shift();
-
-      const avg = Math.round(rates.reduce((a, b) => a + b, 0) / rates.length);
-      fpsDiv.innerText = `速率：${avg} 次/分`;
     }
 
     function drawPoint(pt, color) {
