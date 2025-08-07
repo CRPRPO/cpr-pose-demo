@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 手肘偵測 V3.3</title>
+  <title>CPR 手肘偵測 V3.3.1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
@@ -33,6 +33,7 @@
   <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
 
   <script>
+    // 初始化 DOM 元素
     const videoElement = document.getElementById('video');
     const canvasElement = document.getElementById('canvas');
     const canvasCtx = canvasElement.getContext('2d');
@@ -40,6 +41,7 @@
     const startBtn = document.getElementById('startBtn');
     const errorBox = document.getElementById('error');
 
+    // 載入 MediaPipe pose 與 camera 工具
     async function loadScripts() {
       return new Promise((resolve, reject) => {
         const poseScript = document.createElement("script");
@@ -56,6 +58,7 @@
       });
     }
 
+    // 幾何計算工具
     function distance(p1, p2) {
       const dx = p1.x - p2.x;
       const dy = p1.y - p2.y;
@@ -66,6 +69,7 @@
       return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     }
 
+    // 主流程：啟動鏡頭與姿勢偵測
     async function startSystem() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -84,21 +88,24 @@
           minTrackingConfidence: 0.5
         });
 
+        // 每次姿勢偵測完成的回呼函式
         pose.onResults((results) => {
           if (!results.poseLandmarks) return;
 
+          // 畫布設定與初始化
           canvasElement.width = videoElement.videoWidth;
           canvasElement.height = videoElement.videoHeight;
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
           canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
+          // 抓取 landmark 並轉換座標為畫布座標
           const lm = results.poseLandmarks;
           const scale = (coord) => ({ x: coord.x * canvasElement.width, y: coord.y * canvasElement.height });
-          const ls = scale(lm[11]), rs = scale(lm[12]); // shoulders
-          const lw = scale(lm[15]), rw = scale(lm[16]); // wrists
+          const ls = scale(lm[11]), rs = scale(lm[12]); // 左右肩膀
+          const lw = scale(lm[15]), rw = scale(lm[16]); // 左右手腕
 
-          // 始終畫出肩膀連線（藍色）
+          // 肩膀基準線（藍色，始終顯示）
           canvasCtx.beginPath();
           canvasCtx.moveTo(ls.x, ls.y);
           canvasCtx.lineTo(rs.x, rs.y);
@@ -109,7 +116,7 @@
           const wristDist = distance(lw, rw);
 
           if (wristDist < 50) {
-            // 雙手交疊時畫黃線肩→交疊點，並做垂直距離判斷
+            // 雙手交疊 → 畫黃線（肩 → 中心）
             const wristMid = midpoint(lw, rw);
 
             canvasCtx.strokeStyle = "yellow";
@@ -121,25 +128,25 @@
               canvasCtx.stroke();
             });
 
-            // 垂直距離計算
-            const midShoulder = midpoint(ls, rs);
+            // 新版偵測邏輯：倒三角形頂點到底邊中心的距離
+            const shoulderMid = midpoint(ls, rs); // 底邊中心
             const dx = rs.x - ls.x;
             const dy = rs.y - ls.y;
-            const norm = Math.sqrt(dx * dx + dy * dy);
-            const nx = dy / norm, ny = -dx / norm;
-            const proj = (wristMid.x - midShoulder.x) * nx + (wristMid.y - midShoulder.y) * ny;
-            const orthDist = Math.abs(proj);
+            const baseLength = distance(ls, rs);
+            const triangleHeight = distance(wristMid, shoulderMid); // 這個值代表「壓胸深度姿勢」
 
-            if (orthDist < 40) {
-              feedback.innerText = "✅ 手肘已鎖定";
-              feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
-            } else {
+            // ✅ 可調整的判斷門檻：
+            const STRAIGHT_THRESHOLD = 40; // ← 請自行調整這個值，越小越嚴格
+
+            if (triangleHeight < STRAIGHT_THRESHOLD) {
               feedback.innerText = "⚠️ 手肘可能彎曲";
               feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+            } else {
+              feedback.innerText = "✅ 手肘已鎖定";
+              feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
             }
-
           } else {
-            // 未交疊時畫紅線（肩→手腕）
+            // 雙手尚未交疊 → 畫紅線（肩 → 手腕）
             canvasCtx.strokeStyle = "red";
             canvasCtx.lineWidth = 4;
             [[ls, lw], [rs, rw]].forEach(([a, b]) => {
@@ -149,6 +156,7 @@
               canvasCtx.stroke();
             });
 
+            // 雙手未交疊 → 不顯示打直提示
             feedback.innerText = "請交疊雙手進行壓胸";
             feedback.style.backgroundColor = 'rgba(0,0,0,0.6)';
           }
@@ -156,6 +164,7 @@
           canvasCtx.restore();
         });
 
+        // 啟動鏡頭與 pose 模型
         const camera = new Camera(videoElement, {
           onFrame: async () => {
             await pose.send({ image: videoElement });
@@ -165,18 +174,22 @@
         });
         camera.start();
 
+        // UI 顯示切換
         startBtn.style.display = 'none';
         videoElement.style.display = 'block';
         canvasElement.style.display = 'block';
         feedback.style.display = 'block';
         errorBox.style.display = 'none';
+
       } catch (err) {
+        // 鏡頭開啟失敗處理
         console.error("🚨 鏡頭錯誤：", err);
         errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
         errorBox.style.display = 'block';
       }
     }
 
+    // 點擊啟動鏡頭按鈕
     startBtn.addEventListener('click', startSystem);
   </script>
 </body>
