@@ -1,11 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 手肘偵測 V4.5</title>
+  <title>CPR 手肘偵測 V4.6</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
-    video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; display: none; }
+    video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
+    #feedback {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      font-size: 1.8em; padding: 10px 20px;
+      background-color: rgba(0, 0, 0, 0.6); color: white;
+      border-radius: 12px; z-index: 10;
+    }
+    #rateText {
+      position: absolute; top: 10px; left: 20px;
+      font-size: 1.5em; color: darkred;
+      background: rgba(255,255,255,0.2); padding: 5px 10px;
+      border-radius: 10px; display: none;
+    }
+    #peakCount {
+      position: absolute; top: 50px; left: 20px;
+      font-size: 1.2em; color: yellow; display: none;
+    }
     #startBtn {
       position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
       font-size: 1.5em; padding: 20px 30px;
@@ -17,145 +33,176 @@
       font-size: 1em; color: red; background: white;
       padding: 5px 10px; border-radius: 8px; display: none; z-index: 20;
     }
-    #rateText {
-      position: absolute; top: 20px; left: 20px;
-      font-size: 1.5em; color: #cc0000; background: rgba(255,255,255,0.2);
-      padding: 8px 12px; border-radius: 8px; z-index: 10;
-    }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline muted style="transform: scaleX(-1);"></video>
   <canvas id="canvas"></canvas>
+  <div id="feedback">請雙手交疊</div>
+  <div id="rateText"></div>
+  <div id="peakCount"></div>
   <button id="startBtn">開啟鏡頭</button>
-  <div id="rateText">速率: 0 次/分</div>
   <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
 
-  <script>
-    let lastY = null;
-    let lastDirection = null;
-    let lastTimestamp = null;
-    let pressTimestamps = [];
+<script>
+let triangleStableStart = null;
+let lastTriangleHeight = null;
+let lastPeakType = null;
+let rateBuffer = [];
+let pressCount = 0;
 
-    const MIN_PEAK_DIFF = 5;      // Y 軸變化最小門檻
-    const MIN_PRESS_INTERVAL = 200; // 最小間隔（ms）防止誤判
-    const MAX_HISTORY = 3;        // 最多保留幾個間隔值
+const videoElement = document.getElementById('video');
+const canvasElement = document.getElementById('canvas');
+const canvasCtx = canvasElement.getContext('2d');
+const feedback = document.getElementById('feedback');
+const rateText = document.getElementById('rateText');
+const peakCount = document.getElementById('peakCount');
+const startBtn = document.getElementById('startBtn');
+const errorBox = document.getElementById('error');
 
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('canvas');
-    const canvasCtx = canvasElement.getContext('2d');
-    const startBtn = document.getElementById('startBtn');
-    const rateText = document.getElementById('rateText');
-    const errorBox = document.getElementById('error');
+function distance(p1, p2) {
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
 
-    function distance(p1, p2) {
-      const dx = p1.x - p2.x, dy = p1.y - p2.y;
-      return Math.sqrt(dx * dx + dy * dy);
-    }
+function midpoint(p1, p2) {
+  return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+}
 
-    async function loadScripts() {
-      return new Promise((resolve, reject) => {
-        const poseScript = document.createElement("script");
-        poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
-        poseScript.onload = () => {
-          const cameraScript = document.createElement("script");
-          cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-          cameraScript.onload = resolve;
-          cameraScript.onerror = reject;
-          document.body.appendChild(cameraScript);
-        };
-        poseScript.onerror = reject;
-        document.body.appendChild(poseScript);
-      });
-    }
+function drawLine(p1, p2, color) {
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(p1.x, p1.y);
+  canvasCtx.lineTo(p2.x, p2.y);
+  canvasCtx.strokeStyle = color;
+  canvasCtx.lineWidth = 4;
+  canvasCtx.stroke();
+}
 
-    async function startSystem() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoElement.srcObject = stream;
-        await loadScripts();
+function averageRate(buffer) {
+  if (buffer.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < buffer.length; i++) {
+    total += buffer[i] - buffer[i - 1];
+  }
+  return 60000 / (total / (buffer.length - 1));
+}
 
-        const pose = new window.Pose({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-        });
+async function loadScripts() {
+  return new Promise((resolve, reject) => {
+    const poseScript = document.createElement("script");
+    poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+    poseScript.onload = () => {
+      const cameraScript = document.createElement("script");
+      cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+      cameraScript.onload = resolve;
+      cameraScript.onerror = reject;
+      document.body.appendChild(cameraScript);
+    };
+    poseScript.onerror = reject;
+    document.body.appendChild(poseScript);
+  });
+}
 
-        pose.setOptions({
-          modelComplexity: 0,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+async function startSystem() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoElement.srcObject = stream;
+    await loadScripts();
 
-        pose.onResults((results) => {
-          if (!results.poseLandmarks) return;
+    const pose = new window.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
 
-          canvasElement.width = videoElement.videoWidth;
-          canvasElement.height = videoElement.videoHeight;
-          canvasCtx.save();
-          canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    pose.setOptions({ modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
-          canvasCtx.translate(canvasElement.width, 0);
-          canvasCtx.scale(-1, 1);
-          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+    pose.onResults((results) => {
+      if (!results.poseLandmarks) return;
 
-          const lm = results.poseLandmarks;
-          const scale = (pt) => ({ x: pt.x * canvasElement.width, y: pt.y * canvasElement.height });
-          const ls = scale(lm[11]), rs = scale(lm[12]);
+      canvasElement.width = videoElement.videoWidth;
+      canvasElement.height = videoElement.videoHeight;
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.translate(canvasElement.width, 0);
+      canvasCtx.scale(-1, 1);
 
-          const shoulderMid = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
-          const currentY = shoulderMid.y;
-          const now = Date.now();
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-          if (lastY !== null) {
-            const diff = currentY - lastY;
-            const direction = diff > MIN_PEAK_DIFF ? 'down' : diff < -MIN_PEAK_DIFF ? 'up' : lastDirection;
+      const lm = results.poseLandmarks;
+      const scale = (coord) => ({ x: coord.x * canvasElement.width, y: coord.y * canvasElement.height });
+      const ls = scale(lm[11]), rs = scale(lm[12]);
+      const lw = scale(lm[15]), rw = scale(lm[16]);
 
-            if (lastDirection === 'down' && direction === 'up') {
-              if (!lastTimestamp || now - lastTimestamp > MIN_PRESS_INTERVAL) {
-                pressTimestamps.push(now);
-                if (pressTimestamps.length > MAX_HISTORY) pressTimestamps.shift();
+      drawLine(ls, rs, "cyan");
+      drawLine(ls, lw, "red");
+      drawLine(rs, rw, "red");
 
-                if (pressTimestamps.length >= 2) {
-                  let intervals = [];
-                  for (let i = 1; i < pressTimestamps.length; i++) {
-                    intervals.push(pressTimestamps[i] - pressTimestamps[i - 1]);
-                  }
-                  const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-                  const rate = 60000 / avg;
-                  rateText.innerText = `速率: ${Math.round(rate)} 次/分`;
-                }
-                lastTimestamp = now;
-              }
-            }
-            lastDirection = direction;
+      const wristDist = distance(lw, rw);
+      const shoulderMid = midpoint(ls, rs);
+
+      if (wristDist < 50) {
+        feedback.innerText = "壓胸中...";
+        feedback.style.backgroundColor = "rgba(0,128,0,0.6)";
+
+        const wristMid = midpoint(lw, rw);
+        drawLine(ls, wristMid, "yellow");
+        drawLine(rs, wristMid, "yellow");
+
+        const triangleHeight = distance(shoulderMid, wristMid);
+        const now = Date.now();
+
+        if (lastTriangleHeight !== null) {
+          if (triangleHeight < lastTriangleHeight - 5 && lastPeakType !== 'valley') {
+            lastPeakType = 'valley';
+          } else if (triangleHeight > lastTriangleHeight + 5 && lastPeakType === 'valley') {
+            lastPeakType = 'peak';
+            pressCount++;
+            peakCount.innerText = `波峰次數：${pressCount}`;
+            peakCount.style.display = 'block';
+            rateBuffer.push(now);
+            if (rateBuffer.length > 3) rateBuffer.shift();
+            const rate = averageRate(rateBuffer);
+            rateText.innerText = `速率：${Math.round(rate)} 次/分`;
+            rateText.style.display = 'block';
           }
-          lastY = currentY;
-
-          canvasCtx.restore();
-        });
-
-        const camera = new Camera(videoElement, {
-          onFrame: async () => await pose.send({ image: videoElement }),
-          width: 640,
-          height: 480
-        });
-        camera.start();
-
-        startBtn.style.display = 'none';
-        videoElement.style.display = 'block';
-        canvasElement.style.display = 'block';
-        rateText.style.display = 'block';
-        errorBox.style.display = 'none';
-
-      } catch (err) {
-        console.error("🚨 鏡頭錯誤：", err);
-        errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
-        errorBox.style.display = 'block';
+        }
+        lastTriangleHeight = triangleHeight;
+      } else {
+        feedback.innerText = "請雙手交疊";
+        feedback.style.backgroundColor = "rgba(0,0,0,0.6)";
+        rateText.style.display = 'none';
+        peakCount.style.display = 'none';
+        rateBuffer = [];
+        pressCount = 0;
+        lastPeakType = null;
+        lastTriangleHeight = null;
       }
-    }
 
-    startBtn.addEventListener('click', startSystem);
-  </script>
+      canvasCtx.restore();
+    });
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await pose.send({ image: videoElement });
+      },
+      width: 640,
+      height: 480
+    });
+    camera.start();
+
+    startBtn.style.display = 'none';
+    videoElement.style.display = 'block';
+    canvasElement.style.display = 'block';
+    feedback.style.display = 'block';
+    errorBox.style.display = 'none';
+  } catch (err) {
+    console.error("🚨 鏡頭錯誤：", err);
+    errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
+    errorBox.style.display = 'block';
+  }
+}
+
+startBtn.addEventListener('click', startSystem);
+</script>
 </body>
 </html>
