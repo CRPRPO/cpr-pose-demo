@@ -1,27 +1,11 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 手肘偵測 V4.6</title>
+  <title>CPR 手肘偵測 V4.7</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
     video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
-    #feedback {
-      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-      font-size: 1.8em; padding: 10px 20px;
-      background-color: rgba(0, 0, 0, 0.6); color: white;
-      border-radius: 12px; z-index: 10;
-    }
-    #rateText {
-      position: absolute; top: 10px; left: 20px;
-      font-size: 1.5em; color: darkred;
-      background: rgba(255,255,255,0.2); padding: 5px 10px;
-      border-radius: 10px; display: none;
-    }
-    #peakCount {
-      position: absolute; top: 50px; left: 20px;
-      font-size: 1.2em; color: yellow; display: none;
-    }
     #startBtn {
       position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
       font-size: 1.5em; padding: 20px 30px;
@@ -38,171 +22,177 @@
 <body>
   <video id="video" autoplay playsinline muted style="transform: scaleX(-1);"></video>
   <canvas id="canvas"></canvas>
-  <div id="feedback">請雙手交疊</div>
-  <div id="rateText"></div>
-  <div id="peakCount"></div>
   <button id="startBtn">開啟鏡頭</button>
   <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
 
-<script>
-let triangleStableStart = null;
-let lastTriangleHeight = null;
-let lastPeakType = null;
-let rateBuffer = [];
-let pressCount = 0;
+  <script>
+    let triangleStableStart = null;
+    let lastPeakTime = null;
+    let peakState = 'none';
+    let pressTimestamps = [];
+    let lastTriangleHeight = null;
+    let peakCount = 0;
+    let lastWristDist = 999;
+    let isHandsOverlapped = false;
+    const PEAK_DELTA = 3;
+    const STABLE_DURATION = 2000;
+    const PRESS_MIN_INTERVAL = 300;
+    const MAX_RECORDS = 10;
 
-const videoElement = document.getElementById('video');
-const canvasElement = document.getElementById('canvas');
-const canvasCtx = canvasElement.getContext('2d');
-const feedback = document.getElementById('feedback');
-const rateText = document.getElementById('rateText');
-const peakCount = document.getElementById('peakCount');
-const startBtn = document.getElementById('startBtn');
-const errorBox = document.getElementById('error');
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const errorBox = document.getElementById('error');
 
-function distance(p1, p2) {
-  const dx = p1.x - p2.x;
-  const dy = p1.y - p2.y;
-  return Math.sqrt(dx * dx + dy * dy);
-}
+    function distance(p1, p2) {
+      const dx = p1.x - p2.x;
+      const dy = p1.y - p2.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+    function midpoint(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
 
-function midpoint(p1, p2) {
-  return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-}
+    function drawOverlay(rate, avg, peaks) {
+      const x = 20, y = 40;
+      canvasCtx.fillStyle = "rgba(0, 0, 0, 0.8)";
+      canvasCtx.fillRect(x - 10, y - 30, 300, 130);
+      canvasCtx.fillStyle = "white";
+      canvasCtx.font = "bold 36px sans-serif";
+      canvasCtx.fillText(`速率: ${Math.round(rate)} 次/分`, x, y);
+      canvasCtx.fillText(`平均: ${Math.round(avg)} 次/分`, x, y + 45);
+      canvasCtx.fillText(`波峰: ${peaks}`, x, y + 90);
+    }
 
-function drawLine(p1, p2, color) {
-  canvasCtx.beginPath();
-  canvasCtx.moveTo(p1.x, p1.y);
-  canvasCtx.lineTo(p2.x, p2.y);
-  canvasCtx.strokeStyle = color;
-  canvasCtx.lineWidth = 4;
-  canvasCtx.stroke();
-}
+    async function loadScripts() {
+      return new Promise((resolve, reject) => {
+        const poseScript = document.createElement("script");
+        poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+        poseScript.onload = () => {
+          const cameraScript = document.createElement("script");
+          cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+          cameraScript.onload = resolve;
+          cameraScript.onerror = reject;
+          document.body.appendChild(cameraScript);
+        };
+        poseScript.onerror = reject;
+        document.body.appendChild(poseScript);
+      });
+    }
 
-function averageRate(buffer) {
-  if (buffer.length < 2) return 0;
-  let total = 0;
-  for (let i = 1; i < buffer.length; i++) {
-    total += buffer[i] - buffer[i - 1];
-  }
-  return 60000 / (total / (buffer.length - 1));
-}
+    async function startSystem() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = stream;
+        await loadScripts();
 
-async function loadScripts() {
-  return new Promise((resolve, reject) => {
-    const poseScript = document.createElement("script");
-    poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
-    poseScript.onload = () => {
-      const cameraScript = document.createElement("script");
-      cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-      cameraScript.onload = resolve;
-      cameraScript.onerror = reject;
-      document.body.appendChild(cameraScript);
-    };
-    poseScript.onerror = reject;
-    document.body.appendChild(poseScript);
-  });
-}
+        const pose = new window.Pose({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
 
-async function startSystem() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    videoElement.srcObject = stream;
-    await loadScripts();
+        pose.setOptions({
+          modelComplexity: 0, smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
 
-    const pose = new window.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-    });
+        pose.onResults((results) => {
+          if (!results.poseLandmarks) return;
 
-    pose.setOptions({ modelComplexity: 0, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+          canvasCtx.save();
+          canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+          canvasCtx.translate(canvasElement.width, 0);
+          canvasCtx.scale(-1, 1);
+          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-    pose.onResults((results) => {
-      if (!results.poseLandmarks) return;
+          const lm = results.poseLandmarks;
+          const scale = (pt) => ({ x: pt.x * canvasElement.width, y: pt.y * canvasElement.height });
+          const ls = scale(lm[11]), rs = scale(lm[12]), lw = scale(lm[15]), rw = scale(lm[16]);
 
-      canvasElement.width = videoElement.videoWidth;
-      canvasElement.height = videoElement.videoHeight;
-      canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-      canvasCtx.translate(canvasElement.width, 0);
-      canvasCtx.scale(-1, 1);
+          const wristDist = distance(lw, rw);
+          const wristMid = midpoint(lw, rw);
+          const shoulderMid = midpoint(ls, rs);
 
-      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+          const triangleHeight = distance(wristMid, shoulderMid);
+          const now = Date.now();
 
-      const lm = results.poseLandmarks;
-      const scale = (coord) => ({ x: coord.x * canvasElement.width, y: coord.y * canvasElement.height });
-      const ls = scale(lm[11]), rs = scale(lm[12]);
-      const lw = scale(lm[15]), rw = scale(lm[16]);
+          if (wristDist < 50) {
+            if (!isHandsOverlapped) triangleStableStart = now;
+            isHandsOverlapped = true;
+            lastWristDist = wristDist;
 
-      drawLine(ls, rs, "cyan");
-      drawLine(ls, lw, "red");
-      drawLine(rs, rw, "red");
+            canvasCtx.strokeStyle = "yellow";
+            canvasCtx.lineWidth = 4;
+            [ls, rs].forEach(p => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(p.x, p.y);
+              canvasCtx.lineTo(wristMid.x, wristMid.y);
+              canvasCtx.stroke();
+            });
 
-      const wristDist = distance(lw, rw);
-      const shoulderMid = midpoint(ls, rs);
-
-      if (wristDist < 50) {
-        feedback.innerText = "壓胸中...";
-        feedback.style.backgroundColor = "rgba(0,128,0,0.6)";
-
-        const wristMid = midpoint(lw, rw);
-        drawLine(ls, wristMid, "yellow");
-        drawLine(rs, wristMid, "yellow");
-
-        const triangleHeight = distance(shoulderMid, wristMid);
-        const now = Date.now();
-
-        if (lastTriangleHeight !== null) {
-          if (triangleHeight < lastTriangleHeight - 5 && lastPeakType !== 'valley') {
-            lastPeakType = 'valley';
-          } else if (triangleHeight > lastTriangleHeight + 5 && lastPeakType === 'valley') {
-            lastPeakType = 'peak';
-            pressCount++;
-            peakCount.innerText = `波峰次數：${pressCount}`;
-            peakCount.style.display = 'block';
-            rateBuffer.push(now);
-            if (rateBuffer.length > 3) rateBuffer.shift();
-            const rate = averageRate(rateBuffer);
-            rateText.innerText = `速率：${Math.round(rate)} 次/分`;
-            rateText.style.display = 'block';
+            if (now - triangleStableStart > STABLE_DURATION) {
+              if (lastTriangleHeight !== null) {
+                if (triangleHeight > lastTriangleHeight + PEAK_DELTA && peakState !== 'up') {
+                  peakState = 'up';
+                } else if (triangleHeight < lastTriangleHeight - PEAK_DELTA && peakState === 'up') {
+                  peakState = 'down';
+                  if (!lastPeakTime || now - lastPeakTime > PRESS_MIN_INTERVAL) {
+                    pressTimestamps.push(now);
+                    if (pressTimestamps.length > MAX_RECORDS) pressTimestamps.shift();
+                    lastPeakTime = now;
+                    peakCount++;
+                  }
+                }
+              }
+              lastTriangleHeight = triangleHeight;
+            }
+          } else {
+            isHandsOverlapped = false;
+            canvasCtx.strokeStyle = "red";
+            canvasCtx.lineWidth = 4;
+            [[ls, lw], [rs, rw]].forEach(([a, b]) => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(a.x, a.y);
+              canvasCtx.lineTo(b.x, b.y);
+              canvasCtx.stroke();
+            });
           }
-        }
-        lastTriangleHeight = triangleHeight;
-      } else {
-        feedback.innerText = "請雙手交疊";
-        feedback.style.backgroundColor = "rgba(0,0,0,0.6)";
-        rateText.style.display = 'none';
-        peakCount.style.display = 'none';
-        rateBuffer = [];
-        pressCount = 0;
-        lastPeakType = null;
-        lastTriangleHeight = null;
+
+          if (pressTimestamps.length >= 2) {
+            let total = 0;
+            for (let i = 1; i < pressTimestamps.length; i++) total += pressTimestamps[i] - pressTimestamps[i - 1];
+            const avg = total / (pressTimestamps.length - 1);
+            const rate = 60000 / avg;
+            const allRates = pressTimestamps.slice(1).map((t, i) => 60000 / (t - pressTimestamps[i]));
+            const avgRate = allRates.reduce((a, b) => a + b, 0) / allRates.length;
+            drawOverlay(rate, avgRate, peakCount);
+          }
+
+          canvasCtx.restore();
+        });
+
+        const camera = new Camera(videoElement, {
+          onFrame: async () => await pose.send({ image: videoElement }),
+          width: 640, height: 480
+        });
+        camera.start();
+
+        startBtn.style.display = 'none';
+        videoElement.style.display = 'block';
+        canvasElement.style.display = 'block';
+        errorBox.style.display = 'none';
+
+      } catch (err) {
+        console.error("🚨 鏡頭錯誤：", err);
+        errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
+        errorBox.style.display = 'block';
       }
-
-      canvasCtx.restore();
-    });
-
-    const camera = new Camera(videoElement, {
-      onFrame: async () => {
-        await pose.send({ image: videoElement });
-      },
-      width: 640,
-      height: 480
-    });
-    camera.start();
-
-    startBtn.style.display = 'none';
-    videoElement.style.display = 'block';
-    canvasElement.style.display = 'block';
-    feedback.style.display = 'block';
-    errorBox.style.display = 'none';
-  } catch (err) {
-    console.error("🚨 鏡頭錯誤：", err);
-    errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
-    errorBox.style.display = 'block';
-  }
-}
-
-startBtn.addEventListener('click', startSystem);
-</script>
+    }
+    startBtn.addEventListener('click', startSystem);
+  </script>
 </body>
 </html>
