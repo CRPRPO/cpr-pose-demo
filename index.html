@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 手肘偵測 V3.1</title>
+  <title>CPR 手肘偵測 V3.2</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
@@ -101,54 +101,28 @@
 
           const wristDist = distance(lw, rw);
 
-          if (wristDist < 50) {
-            const wristMid = midpoint(lw, rw);
+          // 永遠畫出肩膀連線
+canvasCtx.beginPath();
+canvasCtx.moveTo(ls.x, ls.y);
+canvasCtx.lineTo(rs.x, rs.y);
+canvasCtx.strokeStyle = "cyan";
+canvasCtx.lineWidth = 2;
+canvasCtx.stroke();
 
-            // 畫黃線（肩膀 → 中心）
-            canvasCtx.strokeStyle = "yellow";
-            canvasCtx.lineWidth = 4;
-            [ls, rs].forEach(p => {
-              canvasCtx.beginPath();
-              canvasCtx.moveTo(p.x, p.y);
-              canvasCtx.lineTo(wristMid.x, wristMid.y);
-              canvasCtx.stroke();
-            });
-
-            // 畫肩膀基準線
-            canvasCtx.beginPath();
-            canvasCtx.moveTo(ls.x, ls.y);
-            canvasCtx.lineTo(rs.x, rs.y);
-            canvasCtx.strokeStyle = "cyan";
-            canvasCtx.lineWidth = 2;
-            canvasCtx.stroke();
-
-            // 計算手腕點到肩線垂直中線的距離
-            const midShoulder = midpoint(ls, rs);
-            const shoulderLineLen = distance(ls, rs);
-            const dx = rs.x - ls.x;
-            const dy = rs.y - ls.y;
-            const norm = Math.sqrt(dx * dx + dy * dy);
-            const nx = dy / norm, ny = -dx / norm;
-            const projLen = (wristMid.x - midShoulder.x) * nx + (wristMid.y - midShoulder.y) * ny;
-            const orthDist = Math.abs(projLen);
-
-            if (orthDist < 40) {
-              feedback.innerText = "✅ 手肘已鎖定";
-              feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
-            } else {
+if (wristDist < 50) {
               feedback.innerText = "⚠️ 手肘可能彎曲";
               feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
             }
           } else {
             // 畫紅線（肩 → 手肘）
             canvasCtx.strokeStyle = "red";
-            canvasCtx.lineWidth = 4;
-            [[ls, le], [rs, re]].forEach(([a, b]) => {
-              canvasCtx.beginPath();
-              canvasCtx.moveTo(a.x, a.y);
-              canvasCtx.lineTo(b.x, b.y);
-              canvasCtx.stroke();
-            });
+canvasCtx.lineWidth = 4;
+[[ls, lw], [rs, rw]].forEach(([a, b]) => {
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(a.x, a.y);
+  canvasCtx.lineTo(b.x, b.y);
+  canvasCtx.stroke();
+});
 
             feedback.innerText = "請交疊雙手進行壓胸";
             feedback.style.backgroundColor = 'rgba(0,0,0,0.6)';
