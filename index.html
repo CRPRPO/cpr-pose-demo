@@ -1,62 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 手肘鎖定偵測 V3</title>
+  <title>CPR 手肘偵測 V3.1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: black;
-      font-family: sans-serif;
-    }
-    canvas, video {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      display: none;
-    }
+    body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
+    canvas, video { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; display: none; }
     #feedback {
-      position: absolute;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 1.8em;
-      padding: 10px 20px;
-      background-color: rgba(0, 0, 0, 0.6);
-      color: white;
-      border-radius: 12px;
-      z-index: 10;
-      display: none;
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      font-size: 1.8em; padding: 10px 20px;
+      background-color: rgba(0, 0, 0, 0.6); color: white;
+      border-radius: 12px; z-index: 10; display: none;
     }
     #startBtn {
-      position: absolute;
-      top: 40%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 1.5em;
-      padding: 20px 30px;
-      background-color: #28a745;
-      color: white;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      z-index: 20;
+      position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 1.5em; padding: 20px 30px;
+      background-color: #28a745; color: white; border: none;
+      border-radius: 12px; cursor: pointer; z-index: 20;
     }
     #error {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 1em;
-      color: red;
-      background: white;
-      padding: 5px 10px;
-      border-radius: 8px;
-      display: none;
-      z-index: 20;
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      font-size: 1em; color: red; background: white;
+      padding: 5px 10px; border-radius: 8px; display: none; z-index: 20;
     }
   </style>
 </head>
@@ -91,6 +56,16 @@
       });
     }
 
+    function distance(p1, p2) {
+      const dx = p1.x - p2.x;
+      const dy = p1.y - p2.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function midpoint(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
     async function startSystem() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -114,71 +89,69 @@
 
           canvasElement.width = videoElement.videoWidth;
           canvasElement.height = videoElement.videoHeight;
-
           canvasCtx.save();
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
           canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
 
-          const landmarks = results.poseLandmarks;
-          const ls = landmarks[11]; // left shoulder
-          const rs = landmarks[12]; // right shoulder
-          const lw = landmarks[15]; // left wrist
-          const rw = landmarks[16]; // right wrist
+          const lm = results.poseLandmarks;
+          const scale = (coord) => ({ x: coord.x * canvasElement.width, y: coord.y * canvasElement.height });
+          const ls = scale(lm[11]), rs = scale(lm[12]);
+          const le = scale(lm[13]), re = scale(lm[14]);
+          const lw = scale(lm[15]), rw = scale(lm[16]);
 
-          const cx = (lw.x + rw.x) / 2 * canvasElement.width;
-          const cy = (lw.y + rw.y) / 2 * canvasElement.height;
+          const wristDist = distance(lw, rw);
 
-          const lx = ls.x * canvasElement.width;
-          const ly = ls.y * canvasElement.height;
-          const rx = rs.x * canvasElement.width;
-          const ry = rs.y * canvasElement.height;
+          if (wristDist < 50) {
+            const wristMid = midpoint(lw, rw);
 
-          // 畫左肩 → 手腕中心
-          canvasCtx.beginPath();
-          canvasCtx.moveTo(lx, ly);
-          canvasCtx.lineTo(cx, cy);
-          canvasCtx.strokeStyle = "yellow";
-          canvasCtx.lineWidth = 4;
-          canvasCtx.stroke();
+            // 畫黃線（肩膀 → 中心）
+            canvasCtx.strokeStyle = "yellow";
+            canvasCtx.lineWidth = 4;
+            [ls, rs].forEach(p => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(p.x, p.y);
+              canvasCtx.lineTo(wristMid.x, wristMid.y);
+              canvasCtx.stroke();
+            });
 
-          // 畫右肩 → 手腕中心
-          canvasCtx.beginPath();
-          canvasCtx.moveTo(rx, ry);
-          canvasCtx.lineTo(cx, cy);
-          canvasCtx.strokeStyle = "yellow";
-          canvasCtx.lineWidth = 4;
-          canvasCtx.stroke();
+            // 畫肩膀基準線
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(ls.x, ls.y);
+            canvasCtx.lineTo(rs.x, rs.y);
+            canvasCtx.strokeStyle = "cyan";
+            canvasCtx.lineWidth = 2;
+            canvasCtx.stroke();
 
-          // 畫左肩 ↔ 右肩
-          canvasCtx.beginPath();
-          canvasCtx.moveTo(lx, ly);
-          canvasCtx.lineTo(rx, ry);
-          canvasCtx.strokeStyle = "cyan";
-          canvasCtx.lineWidth = 2;
-          canvasCtx.stroke();
+            // 計算手腕點到肩線垂直中線的距離
+            const midShoulder = midpoint(ls, rs);
+            const shoulderLineLen = distance(ls, rs);
+            const dx = rs.x - ls.x;
+            const dy = rs.y - ls.y;
+            const norm = Math.sqrt(dx * dx + dy * dy);
+            const nx = dy / norm, ny = -dx / norm;
+            const projLen = (wristMid.x - midShoulder.x) * nx + (wristMid.y - midShoulder.y) * ny;
+            const orthDist = Math.abs(projLen);
 
-          // 計算角度
-          function getAngle(ax, ay, bx, by) {
-            const dx = bx - ax;
-            const dy = by - ay;
-            return Math.atan2(dy, dx) * 180 / Math.PI;
-          }
-
-          const angleLeft = getAngle(lx, ly, cx, cy);
-          const angleRight = getAngle(rx, ry, cx, cy);
-
-          canvasCtx.fillStyle = "white";
-          canvasCtx.font = "20px sans-serif";
-          canvasCtx.fillText(`左角: ${Math.round(angleLeft)}°`, lx + 10, ly - 10);
-          canvasCtx.fillText(`右角: ${Math.round(angleRight)}°`, rx + 10, ry - 10);
-
-          const warning = (Math.abs(angleLeft) < 140 || Math.abs(angleRight) < 140);
-          if (warning) {
-            feedback.innerText = "⚠️ 手肘可能彎曲";
-            feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+            if (orthDist < 40) {
+              feedback.innerText = "✅ 手肘已鎖定";
+              feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+            } else {
+              feedback.innerText = "⚠️ 手肘可能彎曲";
+              feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+            }
           } else {
-            feedback.innerText = "✅ 手肘已鎖定";
-            feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+            // 畫紅線（肩 → 手肘）
+            canvasCtx.strokeStyle = "red";
+            canvasCtx.lineWidth = 4;
+            [[ls, le], [rs, re]].forEach(([a, b]) => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(a.x, a.y);
+              canvasCtx.lineTo(b.x, b.y);
+              canvasCtx.stroke();
+            });
+
+            feedback.innerText = "請交疊雙手進行壓胸";
+            feedback.style.backgroundColor = 'rgba(0,0,0,0.6)';
           }
 
           canvasCtx.restore();
