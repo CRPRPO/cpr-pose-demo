@@ -29,14 +29,7 @@
   <button id="startBtn">開啟鏡頭</button>
   <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
   
-<!-- CPR 偵測系統 V4.3 Final 版本 -->
-<!-- 整合內容：
-1. 鏡像顯示（video + canvas）
-2. 左上角顯示速率數字（深紅色）
-3. CPR 速率偵測（triangleHeight 變化）
-4. 三角形穩定性偵測（2 秒啟動）
-5. 預留角度偵測欄位（未實作夾角公式）
--->
+
 <video id="video" autoplay playsinline muted style="transform: scaleX(-1);"></video>
 <canvas id="canvas"></canvas>
 <div id="feedback" style="position:absolute;top:20px;left:50%;transform:translateX(-50%);font-size:1.8em;padding:10px 20px;background-color:rgba(0,0,0,0.6);color:white;border-radius:12px;z-index:10;display:none;">準備中...</div>
