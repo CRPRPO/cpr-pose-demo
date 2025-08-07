@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CPR 手肘偵測 V4</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
+    canvas, video { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; display: none; }
+    #feedback {
+      position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+      font-size: 1.8em; padding: 10px 20px;
+      background-color: rgba(0, 0, 0, 0.6); color: white;
+      border-radius: 12px; z-index: 10; display: none;
+    }
+    #startBtn {
+      position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 1.5em; padding: 20px 30px;
+      background-color: #28a745; color: white; border: none;
+      border-radius: 12px; cursor: pointer; z-index: 20;
+    }
+    #error {
+      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+      font-size: 1em; color: red; background: white;
+      padding: 5px 10px; border-radius: 8px; display: none; z-index: 20;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="feedback">準備中...</div>
+  <button id="startBtn">開啟鏡頭</button>
+  <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
+
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    const feedback = document.getElementById('feedback');
+    const startBtn = document.getElementById('startBtn');
+    const errorBox = document.getElementById('error');
+
+    const STRAIGHT_THRESHOLD = 20; // 頂點到底邊中點的距離 (px)
+    const STABLE_DURATION = 2000; // 倒三角穩定時間 (ms)
+    const PRESS_MIN_INTERVAL = 300; // 最小按壓間隔 (ms)
+
+    let triangleStableStart = null;
+    let lastPeakTime = null;
+    let peakState = 'none'; // 'up' | 'down'
+    let pressTimestamps = [];
+    let lastTriangleHeight = null;
+
+    async function loadScripts() {
+      return new Promise((resolve, reject) => {
+        const poseScript = document.createElement("script");
+        poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
+        poseScript.onload = () => {
+          const cameraScript = document.createElement("script");
+          cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+          cameraScript.onload = resolve;
+          cameraScript.onerror = reject;
+          document.body.appendChild(cameraScript);
+        };
+        poseScript.onerror = reject;
+        document.body.appendChild(poseScript);
+      });
+    }
+
+    function distance(p1, p2) {
+      const dx = p1.x - p2.x;
+      const dy = p1.y - p2.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function midpoint(p1, p2) {
+      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+
+    function drawGauge(rate) {
+      const x = canvasElement.width - 160;
+      const y = 30;
+      const w = 100;
+      const h = 12;
+      const min = 60, max = 200;
+
+      const percent = Math.min(1, Math.max(0, (rate - min) / (max - min)));
+      const pos = x + percent * w;
+
+      // 底條
+      canvasCtx.fillStyle = '#333';
+      canvasCtx.fillRect(x, y, w, h);
+
+      // 色條
+      const safeStart = (100 - min) / (max - min);
+      const safeEnd = (120 - min) / (max - min);
+      canvasCtx.fillStyle = 'red';
+      canvasCtx.fillRect(x, y, safeStart * w, h);
+      canvasCtx.fillRect(x + safeEnd * w, y, (1 - safeEnd) * w, h);
+      canvasCtx.fillStyle = 'green';
+      canvasCtx.fillRect(x + safeStart * w, y, (safeEnd - safeStart) * w, h);
+
+      // 指針
+      canvasCtx.fillStyle = 'white';
+      canvasCtx.beginPath();
+      canvasCtx.arc(pos, y + h / 2, 5, 0, Math.PI * 2);
+      canvasCtx.fill();
+
+      // 文字
+      canvasCtx.fillStyle = 'white';
+      canvasCtx.font = '14px sans-serif';
+      canvasCtx.fillText(`速率: ${Math.round(rate)} 次/分`, x - 10, y + 30);
+    }
+
+    async function startSystem() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        videoElement.srcObject = stream;
+        await loadScripts();
+
+        const pose = new window.Pose({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({
+          modelComplexity: 0,
+          smoothLandmarks: true,
+          enableSegmentation: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        pose.onResults((results) => {
+          if (!results.poseLandmarks) return;
+
+          canvasElement.width = videoElement.videoWidth;
+          canvasElement.height = videoElement.videoHeight;
+          canvasCtx.save();
+          canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+          const lm = results.poseLandmarks;
+          const scale = (coord) => ({ x: coord.x * canvasElement.width, y: coord.y * canvasElement.height });
+          const ls = scale(lm[11]), rs = scale(lm[12]);
+          const lw = scale(lm[15]), rw = scale(lm[16]);
+
+          const wristDist = distance(lw, rw);
+          const shoulderMid = midpoint(ls, rs);
+
+          // 畫肩膀藍線
+          canvasCtx.beginPath();
+          canvasCtx.moveTo(ls.x, ls.y);
+          canvasCtx.lineTo(rs.x, rs.y);
+          canvasCtx.strokeStyle = "cyan";
+          canvasCtx.lineWidth = 2;
+          canvasCtx.stroke();
+
+          if (wristDist < 50) {
+            const wristMid = midpoint(lw, rw);
+            // 畫黃線
+            [ls, rs].forEach(p => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(p.x, p.y);
+              canvasCtx.lineTo(wristMid.x, wristMid.y);
+              canvasCtx.strokeStyle = "yellow";
+              canvasCtx.lineWidth = 4;
+              canvasCtx.stroke();
+            });
+
+            const triangleHeight = distance(wristMid, shoulderMid);
+
+            if (triangleHeight > STRAIGHT_THRESHOLD) {
+              feedback.innerText = "✅ 手肘已鎖定";
+              feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
+            } else {
+              feedback.innerText = "⚠️ 手肘可能彎曲";
+              feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
+            }
+
+            const now = Date.now();
+            if (!triangleStableStart || Math.abs(triangleHeight - lastTriangleHeight) > 10) {
+              triangleStableStart = now;
+              pressTimestamps = [];
+              lastPeakTime = null;
+              peakState = 'none';
+            } else if (now - triangleStableStart > STABLE_DURATION) {
+              if (lastTriangleHeight !== null) {
+                if (triangleHeight > lastTriangleHeight + 5 && peakState !== 'up') {
+                  peakState = 'up';
+                } else if (triangleHeight < lastTriangleHeight - 5 && peakState === 'up') {
+                  peakState = 'down';
+                  if (!lastPeakTime || now - lastPeakTime > PRESS_MIN_INTERVAL) {
+                    pressTimestamps.push(now);
+                    lastPeakTime = now;
+                  }
+                }
+              }
+
+              if (pressTimestamps.length >= 2) {
+                let total = 0;
+                for (let i = 1; i < pressTimestamps.length; i++) {
+                  total += pressTimestamps[i] - pressTimestamps[i - 1];
+                }
+                const avg = total / (pressTimestamps.length - 1);
+                const rate = 60000 / avg;
+                drawGauge(rate);
+              }
+            }
+            lastTriangleHeight = triangleHeight;
+
+          } else {
+            // 畫紅線
+            [[ls, lw], [rs, rw]].forEach(([a, b]) => {
+              canvasCtx.beginPath();
+              canvasCtx.moveTo(a.x, a.y);
+              canvasCtx.lineTo(b.x, b.y);
+              canvasCtx.strokeStyle = "red";
+              canvasCtx.lineWidth = 4;
+              canvasCtx.stroke();
+            });
+
+            feedback.innerText = "請交疊雙手進行壓胸";
+            feedback.style.backgroundColor = 'rgba(0,0,0,0.6)';
+          }
+
+          canvasCtx.restore();
+        });
+
+        const camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await pose.send({ image: videoElement });
+          },
+          width: 640,
+          height: 480
+        });
+        camera.start();
+
+        startBtn.style.display = 'none';
+        videoElement.style.display = 'block';
+        canvasElement.style.display = 'block';
+        feedback.style.display = 'block';
+        errorBox.style.display = 'none';
+
+      } catch (err) {
+        console.error("🚨 鏡頭錯誤：", err);
+        errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
+        errorBox.style.display = 'block';
+      }
+    }
+
+    startBtn.addEventListener('click', startSystem);
+  </script>
+</body>
+</html>
