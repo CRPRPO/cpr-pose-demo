@@ -1,193 +1,172 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8" />
-  <title>CPR 偵測 V4.8.4</title>
+  <meta charset="UTF-8">
+  <title>CPR 手臀姿勢偵測 V4.8.3</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; overflow: hidden; background: black; font-family: sans-serif; }
-    video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
-    #feedback, #rateBox {
-      position: absolute; left: 50%; transform: translateX(-50%);
-      font-size: 2em; color: white; background: rgba(0, 0, 0, 0.7); padding: 10px 20px; border-radius: 12px; z-index: 10;
+    body { margin: 0; background: black; overflow: hidden; font-family: sans-serif; }
+    video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; display: none; }
+    #rateDisplay {
+      position: absolute; top: 20px; left: 20px;
+      background: rgba(0,0,0,0.6); color: white;
+      padding: 20px; font-size: 2em;
+      border-radius: 12px; z-index: 10;
     }
-    #feedback { top: 20px; }
-    #rateBox { top: 70px; font-size: 1.5em; }
-    #startBtn, #setBaselineBtn {
-      position: absolute; left: 50%; transform: translateX(-50%);
-      font-size: 1.5em; padding: 15px 25px; border: none; border-radius: 12px; cursor: pointer;
+    #statusText {
+      position: absolute; bottom: 20px; width: 100%; text-align: center;
+      font-size: 2em; color: white; z-index: 10;
     }
-    #startBtn { top: 40%; background: #28a745; color: white; z-index: 20; }
-    #setBaselineBtn { top: 55%; background: #ffc107; color: black; z-index: 20; display: none; }
-    #error {
-      position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
-      font-size: 1em; color: red; background: white; padding: 5px 10px; border-radius: 8px; display: none;
+    #startBtn {
+      position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 1.5em; padding: 20px 30px;
+      background-color: #28a745; color: white; border: none;
+      border-radius: 12px; cursor: pointer; z-index: 20;
     }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
 </head>
 <body>
+  <button id="startBtn">開啟鏡頭</button>
   <video id="video" autoplay playsinline muted style="transform: scaleX(-1);"></video>
   <canvas id="canvas"></canvas>
+  <div id="rateDisplay">速率: 0 次/分<br>平均: 0<br>次數: 0</div>
+  <div id="statusText">請交疊雙手進行壓胸</div>
 
-  <!-- 提示訊息區域 -->
-  <div id="feedback">請雙手交疊</div>
-  <div id="rateBox">速率: 0 次/分<br>平均速率: 0 次/分<br>按壓次數: 0</div>
-
-  <!-- 操作按鈕 -->
-  <button id="startBtn">開啟鏡頭</button>
-  <button id="setBaselineBtn">設定按壓距離</button>
-  <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
-
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script>
     const video = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    const feedback = document.getElementById('feedback');
-    const rateBox = document.getElementById('rateBox');
+    const rateDisplay = document.getElementById('rateDisplay');
+    const statusText = document.getElementById('statusText');
     const startBtn = document.getElementById('startBtn');
-    const setBaselineBtn = document.getElementById('setBaselineBtn');
-    const errorBox = document.getElementById('error');
 
-    let triangleStableStart = null;
-    let lastPeakTime = null;
-    let pressTimestamps = [];
-    let lastTriangleHeight = null;
+    let lastHeight = null;
     let peakState = 'none';
-    let pressCount = 0;
-    let baselineHeight = null; // ✅ 用戶按下設定時抓的值
-    let baselineReady = false;
+    let timestamps = [];
+    let count = 0;
+    let avgRate = 0;
+    let rate = 0;
 
-    function distance(p1, p2) {
-      const dx = p1.x - p2.x;
-      const dy = p1.y - p2.y;
-      return Math.sqrt(dx * dx + dy * dy);
+    function distance(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
-    function midpoint(p1, p2) {
-      return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    function midpoint(a, b) {
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     }
 
-    function drawLine(p1, p2, color = 'red', width = 3) {
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.stroke();
-    }
-
-    function updateRateDisplay(rate, avg, count) {
-      rateBox.innerHTML = `速率: ${Math.round(rate)} 次/分<br>平均速率: ${Math.round(avg)} 次/分<br>按壓次數: ${count}`;
-    }
-
-    function calculateAvgRate() {
-      if (pressTimestamps.length < 2) return 0;
-      let total = 0;
-      for (let i = 1; i < pressTimestamps.length; i++) {
-        total += pressTimestamps[i] - pressTimestamps[i - 1];
+    function calculateRate() {
+      if (timestamps.length >= 3) {
+        let intervals = [];
+        for (let i = 1; i < timestamps.length; i++) {
+          intervals.push(timestamps[i] - timestamps[i - 1]);
+        }
+        let avg = intervals.reduce((a,b)=>a+b,0) / intervals.length;
+        avgRate = Math.round(60000 / avg);
+        rate = avgRate;
       }
-      return 60000 / (total / (pressTimestamps.length - 1));
     }
 
-    async function startSystem() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        video.srcObject = stream;
+    async function initCameraAndPose() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
 
-        const pose = new Pose.Pose({
-          locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-        });
+      const pose = new Pose.Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+      });
 
-        pose.setOptions({
-          modelComplexity: 0,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+      pose.setOptions({
+        modelComplexity: 0,
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
 
-        pose.onResults(results => {
-          if (!results.poseLandmarks) return;
+      pose.onResults(results => {
+        if (!results.poseLandmarks) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
 
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          ctx.save();
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          ctx.translate(canvas.width, 0); // ✅ 鏡像畫面
-          ctx.scale(-1, 1);
+        ctx.save();
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
 
-          ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
 
-          const lm = results.poseLandmarks;
-          const scale = p => ({ x: p.x * canvas.width, y: p.y * canvas.height });
-          const ls = scale(lm[11]), rs = scale(lm[12]), lw = scale(lm[15]), rw = scale(lm[16]);
+        const lm = results.poseLandmarks;
+        const scale = p => ({ x: p.x * canvas.width, y: p.y * canvas.height });
+        const ls = scale(lm[11]);
+        const rs = scale(lm[12]);
+        const lw = scale(lm[15]);
+        const rw = scale(lm[16]);
 
-          drawLine(ls, rs, 'blue'); // ✅ 肩膀水平線
+        // 畫肩膀線
+        ctx.beginPath();
+        ctx.moveTo(ls.x, ls.y);
+        ctx.lineTo(rs.x, rs.y);
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 3;
+        ctx.stroke();
 
-          const wristDist = distance(lw, rw);
-          const wristMid = midpoint(lw, rw);
-          const shoulderMid = midpoint(ls, rs);
+        const wristDist = distance(lw, rw);
+        const wristMid = midpoint(lw, rw);
+        const shoulderMid = midpoint(ls, rs);
 
-          if (wristDist < 60) {
-            drawLine(ls, wristMid, 'yellow', 4);
-            drawLine(rs, wristMid, 'yellow', 4);
-            const triangleHeight = distance(shoulderMid, wristMid);
+        let triangleHeight = distance(wristMid, shoulderMid);
 
-            if (baselineReady && baselineHeight !== null) {
-              const now = Date.now();
-              if (!lastTriangleHeight) lastTriangleHeight = triangleHeight;
+        if (wristDist < 50) {
+          // 手交疊 -> 畫黃色三角形
+          ctx.beginPath(); ctx.moveTo(ls.x, ls.y); ctx.lineTo(wristMid.x, wristMid.y); ctx.lineTo(rs.x, rs.y);
+          ctx.closePath(); ctx.strokeStyle = 'yellow'; ctx.lineWidth = 4; ctx.stroke();
 
-              if (triangleHeight < lastTriangleHeight - baselineHeight * 0.1) {
-                if (peakState !== 'down') {
-                  pressTimestamps.push(now);
-                  pressCount++;
-                  peakState = 'down';
-                }
-              } else if (triangleHeight > lastTriangleHeight + baselineHeight * 0.1) {
-                peakState = 'up';
-              }
-              lastTriangleHeight = triangleHeight;
-
-              const rate = pressTimestamps.length >= 2 ? 60000 / (pressTimestamps[pressTimestamps.length - 1] - pressTimestamps[pressTimestamps.length - 2]) : 0;
-              const avg = calculateAvgRate();
-              updateRateDisplay(rate, avg, pressCount);
-              feedback.textContent = '壓胸中';
+          const now = Date.now();
+          if (lastHeight !== null) {
+            if (triangleHeight < lastHeight - 5 && peakState !== 'down') {
+              peakState = 'down';
+              count++;
+              timestamps.push(now);
+              if (timestamps.length > 6) timestamps.shift();
+              calculateRate();
+              statusText.innerText = '壓胸中';
+            } else if (triangleHeight > lastHeight + 5) {
+              peakState = 'up';
             }
-          } else {
-            drawLine(ls, lw);
-            drawLine(rs, rw);
-            feedback.textContent = '請雙手交疊';
           }
+          lastHeight = triangleHeight;
 
-          ctx.restore();
-        });
+        } else {
+          // 未交疊 -> 畫紅線
+          ctx.beginPath(); ctx.moveTo(ls.x, ls.y); ctx.lineTo(lw.x, lw.y);
+          ctx.strokeStyle = 'red'; ctx.lineWidth = 3; ctx.stroke();
 
-        const camera = new Camera(video, {
-          onFrame: async () => await pose.send({ image: video }),
-          width: 640,
-          height: 480
-        });
-        camera.start();
+          ctx.beginPath(); ctx.moveTo(rs.x, rs.y); ctx.lineTo(rw.x, rw.y);
+          ctx.strokeStyle = 'red'; ctx.lineWidth = 3; ctx.stroke();
 
-        startBtn.style.display = 'none';
-        setBaselineBtn.style.display = 'block';
-        rateBox.style.display = 'block';
-        feedback.style.display = 'block';
-        errorBox.style.display = 'none';
-      } catch (err) {
-        errorBox.innerText = '⚠️ 鏡頭啟動失敗，錯誤：' + err.message;
-        errorBox.style.display = 'block';
-      }
+          statusText.innerText = '請交疊雙手進行壓胸';
+          lastHeight = null;
+          peakState = 'none';
+        }
+
+        rateDisplay.innerHTML = `速率: ${rate} 次/分<br>平均: ${avgRate}<br>次數: ${count}`;
+
+        ctx.restore();
+      });
+
+      const camera = new CameraUtils.Camera(video, {
+        onFrame: async () => await pose.send({ image: video }),
+        width: 640, height: 480
+      });
+      camera.start();
     }
 
-    startBtn.addEventListener('click', startSystem);
-
-    setBaselineBtn.addEventListener('click', () => {
-      baselineHeight = lastTriangleHeight;
-      baselineReady = true;
-      setBaselineBtn.textContent = '✅ 按壓距離已設定';
-      setBaselineBtn.disabled = true;
+    startBtn.addEventListener('click', () => {
+      startBtn.style.display = 'none';
+      video.style.display = 'block';
+      canvas.style.display = 'block';
+      initCameraAndPose();
     });
   </script>
 </body>
