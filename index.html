@@ -1,35 +1,27 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V2</title>
+  <title>CPR 偵測系統 V5</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
       margin: 0;
       overflow: hidden;
       background: black;
-      font-family: sans-serif;
     }
-    canvas, video {
+    video, canvas {
       position: absolute;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      display: none;
     }
-    #feedback {
-      position: absolute;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 1.8em;
-      padding: 10px 20px;
-      background-color: rgba(0, 0, 0, 0.6);
-      color: white;
-      border-radius: 12px;
-      z-index: 10;
-      display: none;
+    video {
+      transform: scaleX(-1); /* 鏡像影片 */
+      z-index: 0;
+    }
+    canvas {
+      z-index: 1;
     }
     #startBtn {
       position: absolute;
@@ -43,143 +35,55 @@
       border: none;
       border-radius: 12px;
       cursor: pointer;
-      z-index: 20;
-    }
-    #error {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 1em;
-      color: red;
-      background: white;
-      padding: 5px 10px;
-      border-radius: 8px;
-      display: none;
-      z-index: 20;
+      z-index: 2;
     }
   </style>
 </head>
 <body>
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
-  <div id="feedback">準備中...</div>
   <button id="startBtn">開啟鏡頭</button>
-  <div id="error">⚠️ 無法啟動鏡頭，請確認權限</div>
+<script>
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const startBtn = document.getElementById("startBtn");
 
-  <script>
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('canvas');
-    const canvasCtx = canvasElement.getContext('2d');
-    const feedback = document.getElementById('feedback');
-    const startBtn = document.getElementById('startBtn');
-    const errorBox = document.getElementById('error');
+  startBtn.addEventListener("click", async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
 
-    let previousY = null;
-    let lastPressTime = Date.now();
-    let pressCount = 0;
+      video.addEventListener("loadedmetadata", () => {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        startBtn.style.display = "none";
 
-    async function loadScripts() {
-      return new Promise((resolve, reject) => {
-        const poseScript = document.createElement("script");
-        poseScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js";
-        poseScript.onload = () => {
-          const cameraScript = document.createElement("script");
-          cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-          cameraScript.onload = resolve;
-          cameraScript.onerror = reject;
-          document.body.appendChild(cameraScript);
-        };
-        poseScript.onerror = reject;
-        document.body.appendChild(poseScript);
+        // 設定畫布自動更新
+        requestAnimationFrame(drawLoop);
       });
+    } catch (err) {
+      alert("⚠️ 無法啟用鏡頭：" + err.message);
     }
+  });
 
-    async function startSystem() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        videoElement.srcObject = stream;
-        await loadScripts();
+  function drawLoop() {
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // 鏡像畫布 (左右反轉)
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
 
-        const pose = new window.Pose({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
-        });
+    // 可以畫些測試用的畫面，例如：
+    ctx.fillStyle = "white";
+    ctx.font = "20px sans-serif";
+    ctx.fillText("鏡像測試中", 50, 50);
 
-        pose.setOptions({
-          modelComplexity: 0,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+    ctx.restore();
 
-        pose.onResults((results) => {
-          if (!results.poseLandmarks) return;
-
-          canvasElement.width = videoElement.videoWidth;
-          canvasElement.height = videoElement.videoHeight;
-
-          canvasCtx.save();
-          canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-          canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-
-          for (const landmark of results.poseLandmarks) {
-            canvasCtx.beginPath();
-            canvasCtx.arc(landmark.x * canvasElement.width, landmark.y * canvasElement.height, 5, 0, 2 * Math.PI);
-            canvasCtx.fillStyle = "red";
-            canvasCtx.fill();
-          }
-
-          const wristY = results.poseLandmarks[15].y;
-          const now = Date.now();
-          if (previousY !== null) {
-            const dy = previousY - wristY;
-            if (dy > 0.05 && now - lastPressTime > 300) {
-              pressCount++;
-              lastPressTime = now;
-            }
-          }
-          previousY = wristY;
-          const elapsed = (now - lastPressTime) / 1000;
-          const frequency = pressCount / (elapsed > 0 ? elapsed : 1) * 60;
-
-          if (frequency > 110) {
-            feedback.innerText = `太快了：${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(255,0,0,0.7)';
-          } else if (frequency < 90) {
-            feedback.innerText = `太慢了：${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(255,165,0,0.7)';
-          } else {
-            feedback.innerText = `完美節奏！${Math.round(frequency)} 次/分鐘`;
-            feedback.style.backgroundColor = 'rgba(0,128,0,0.7)';
-          }
-
-          canvasCtx.restore();
-        });
-
-        const camera = new Camera(videoElement, {
-          onFrame: async () => {
-            await pose.send({ image: videoElement });
-          },
-          width: 640,
-          height: 480
-        });
-        camera.start();
-
-        // UI 顯示更新
-        startBtn.style.display = 'none';
-        videoElement.style.display = 'block';
-        canvasElement.style.display = 'block';
-        feedback.style.display = 'block';
-        errorBox.style.display = 'none';
-      } catch (err) {
-        console.error("🚨 鏡頭錯誤：", err);
-        errorBox.innerText = "⚠️ 鏡頭啟動失敗，錯誤：" + err.message;
-        errorBox.style.display = 'block';
-      }
-    }
-
-    startBtn.addEventListener('click', startSystem);
-  </script>
+    requestAnimationFrame(drawLoop);
+  }
+</script>
 </body>
 </html>
