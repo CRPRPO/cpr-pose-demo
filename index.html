@@ -2,23 +2,20 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
-  <title>CPR 手勢姿勢偵測 V4.8.7</title>
+  <title>CPR 手腕姿勢偵測 V4.8.5</title>
   <style>
-    html, body {
+    body {
       margin: 0;
-      padding: 0;
-      overflow: hidden;
-      width: 100vw;
-      height: 100vh;
       background: #000;
+      overflow: hidden;
+      font-family: sans-serif;
     }
-    video, canvas {
-      position: fixed;
+    video,
+    canvas {
+      position: absolute;
       top: 0;
       left: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
+      transform: scaleX(-1); /* 鏡像 */
       z-index: 0;
     }
     #infoBox {
@@ -27,18 +24,21 @@
       left: 20px;
       background: rgba(0, 0, 0, 0.6);
       color: white;
-      font-size: 28px;
-      padding: 15px 30px;
-      border-radius: 12px;
-      z-index: 2;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 24px;
+      z-index: 1;
     }
-    #statusText {
+    #messageBox {
       position: absolute;
-      bottom: 20px;
-      width: 100%;
-      text-align: center;
+      top: 100px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
       color: white;
-      font-size: 36px;
+      padding: 10px 30px;
+      border-radius: 10px;
+      font-size: 32px;
       z-index: 2;
     }
     #startButton {
@@ -46,14 +46,26 @@
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
-      font-size: 26px;
+      z-index: 3;
       padding: 20px 40px;
-      background-color: #28a745;
-      color: white;
+      font-size: 24px;
+      background: #28a745;
+      color: #fff;
       border: none;
       border-radius: 10px;
       cursor: pointer;
-      z-index: 3;
+    }
+    #errorBox {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255, 0, 0, 0.8);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 18px;
+      z-index: 4;
     }
   </style>
 </head>
@@ -62,420 +74,131 @@
   <canvas id="canvas"></canvas>
   <div id="infoBox">
     <div id="rate">速率: 0 次/分</div>
-    <div id="avgRate">平均速率: 0 次/分</div>
+    <div id="avg">平均速率: 0 次/分</div>
     <div id="count">按壓次數: 0</div>
   </div>
-  <div id="statusText">請雙手交疊</div>
+  <div id="messageBox">請雙手交疊</div>
   <button id="startButton">開啟鏡頭</button>
+  <div id="errorBox" style="display:none;"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const rateDisplay = document.getElementById('rate');
-    const avgRateDisplay = document.getElementById('avgRate');
-    const countDisplay = document.getElementById('count');
-    const statusText = document.getElementById('statusText');
-    const startButton = document.getElementById('startButton');
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const rateText = document.getElementById("rate");
+    const avgText = document.getElementById("avg");
+    const countText = document.getElementById("count");
+    const messageBox = document.getElementById("messageBox");
+    const startButton = document.getElementById("startButton");
+    const errorBox = document.getElementById("errorBox");
 
-    let count = 0;
-    let rate = 0;
-    let avgRate = 0;
-    let lastPeakTime = 0;
-    let intervals = [];
-    let baseline = null;
-    let inCompression = false;
+    let timestamps = [],
+        lastDirection = null,
+        count = 0,
+        avgRate = 0,
+        baselineY = null,
+        camera;
 
-    function drawLine(p1, p2, color) {
+    function updateRateDisplay() {
+      const now = Date.now();
+      timestamps = timestamps.filter(t => now - t < 60000);
+      const rate = timestamps.length;
+      avgRate = Math.round(
+        timestamps.length > 1
+          ? 60000 * (timestamps.length - 1) / (timestamps[timestamps.length - 1] - timestamps[0])
+          : 0
+      );
+      rateText.innerText = `速率: ${rate} 次/分`;
+      avgText.innerText = `平均速率: ${avgRate} 次/分`;
+      countText.innerText = `按壓次數: ${count}`;
+    }
+
+    function drawLine(a, b, color = "red") {
       ctx.beginPath();
-      ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
-      ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
+      ctx.moveTo(a.x * canvas.width, a.y * canvas.height);
+      ctx.lineTo(b.x * canvas.width, b.y * canvas.height);
       ctx.strokeStyle = color;
       ctx.lineWidth = 4;
       ctx.stroke();
     }
 
-    function onResults(results) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1); // ✅ 鏡像顯示
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      if (!results.poseLandmarks) return;
-
-      const lm = results.poseLandmarks;
-      const leftShoulder = lm[11];
-      const rightShoulder = lm[12];
-      const leftWrist = lm[15];
-      const rightWrist = lm[16];
-
-      drawLine(leftShoulder, rightShoulder, 'blue'); // ✅ 藍色肩膀線
-
-      const wristDistance = Math.hypot(
-        (leftWrist.x - rightWrist.x) * canvas.width,
-        (leftWrist.y - rightWrist.y) * canvas.height
-      );
-
-      if (wristDistance < 50) {
-        const wristMid = {
-          x: (leftWrist.x + rightWrist.x) / 2,
-          y: (leftWrist.y + rightWrist.y) / 2
-        };
-        const shoulderMid = {
-          x: (leftShoulder.x + rightShoulder.x) / 2,
-          y: (leftShoulder.y + rightShoulder.y) / 2
-        };
-        drawLine(leftWrist, rightWrist, 'yellow');
-        drawLine(leftShoulder, wristMid, 'yellow');
-        drawLine(rightShoulder, wristMid, 'yellow');
-      } else {
-        drawLine(leftShoulder, leftWrist, 'red');
-        drawLine(rightShoulder, rightWrist, 'red');
-      }
-
-      const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-      const now = Date.now();
-
-      if (!baseline) baseline = shoulderY;
-      const delta = baseline - shoulderY;
-
-      if (!inCompression && delta > 0.05) {
-        inCompression = true;
-        const interval = now - lastPeakTime;
-        if (lastPeakTime > 0 && interval < 2000) {
-          intervals.push(interval);
-          if (intervals.length > 3) intervals.shift();
-          rate = Math.round(60000 / interval);
-          const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-          avgRate = Math.round(60000 / avgMs);
+    function detectPress(currentY) {
+      if (baselineY === null) baselineY = currentY;
+      const delta = baselineY - currentY;
+      if (Math.abs(delta) > 0.03) {
+        const direction = delta > 0 ? "down" : "up";
+        if (lastDirection && lastDirection === "down" && direction === "up") {
+          timestamps.push(Date.now());
           count++;
+          messageBox.innerText = "壓胸中...";
+          updateRateDisplay();
         }
-        lastPeakTime = now;
-        statusText.innerText = '壓胸中...';
+        lastDirection = direction;
       }
-      if (inCompression && delta < 0.03) {
-        inCompression = false;
-      }
-
-      rateDisplay.innerText = `速率: ${rate} 次/分`;
-      avgRateDisplay.innerText = `平均速率: ${avgRate} 次/分`;
-      countDisplay.innerText = `按壓次數: ${count}`;
-
-      ctx.restore();
     }
 
-    const pose = new Pose({
-      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
+    const pose = new Pose.Pose({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
     pose.setOptions({
       modelComplexity: 0,
       smoothLandmarks: true,
       enableSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
+      selfieMode: true
     });
-    pose.onResults(onResults);
 
-    let stream;
+    pose.onResults(results => {
+      if (!results.poseLandmarks) return;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      const lm = results.poseLandmarks;
+      const lShoulder = lm[11];
+      const rShoulder = lm[12];
+      const lWrist = lm[15];
+      const rWrist = lm[16];
+
+      // 畫線
+      drawLine(lShoulder, rShoulder, "blue");
+      drawLine(lShoulder, lWrist, "red");
+      drawLine(rShoulder, rWrist, "red");
+
+      // 採用平均肩高當成Y基準
+      const avgY = (lShoulder.y + rShoulder.y) / 2;
+      detectPress(avgY);
+
+      ctx.restore();
+    });
+
     startButton.onclick = async () => {
-      startButton.style.display = 'none';
+      startButton.style.display = "none";
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
         video.srcObject = stream;
         video.onloadedmetadata = () => {
           video.play();
+          camera = new Camera(video, {
+            onFrame: async () => {
+              await pose.send({ image: video });
+            },
+            width: 640,
+            height: 480
+          });
+          camera.start();
         };
-
-        // 循環送出影像給 pose
-        const detectLoop = async () => {
-          await pose.send({ image: video });
-          requestAnimationFrame(detectLoop);
-        };
-        detectLoop();
-
       } catch (err) {
-        alert("無法啟動攝影機：" + err.message);
-        console.error("Camera Error:", err);
+        errorBox.innerText = `⚠️ 鏡頭啟動失敗，錯誤：${err.message}`;
+        errorBox.style.display = "block";
       }
     };
-  </script>
-</body>
-</html>
-    <div id="rate">速率: 0 次/分</div>
-    <div id="avgRate">平均速率: 0 次/分</div>
-    <div id="count">按壓次數: 0</div>
-  </div>
-  <div id="statusText">請雙手交疊</div>
-  <button id="startButton">開啟鏡頭</button>
-
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
-
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const rateDisplay = document.getElementById('rate');
-    const avgRateDisplay = document.getElementById('avgRate');
-    const countDisplay = document.getElementById('count');
-    const statusText = document.getElementById('statusText');
-    const startButton = document.getElementById('startButton');
-
-    let count = 0;
-    let rate = 0;
-    let avgRate = 0;
-    let lastPeakTime = 0;
-    let intervals = [];
-    let baseline = null;
-    let inCompression = false;
-
-    function drawLine(p1, p2, color) {
-      ctx.beginPath();
-      ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
-      ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 4;
-      ctx.stroke();
-    }
-
-    function onResults(results) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1); // ✅ 鏡像顯示
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      if (!results.poseLandmarks) return;
-
-      const lm = results.poseLandmarks;
-      const leftShoulder = lm[11];
-      const rightShoulder = lm[12];
-      const leftWrist = lm[15];
-      const rightWrist = lm[16];
-
-      // ✅ 肩膀連線
-      drawLine(leftShoulder, rightShoulder, 'blue');
-
-      const wristDistance = Math.hypot(
-        (leftWrist.x - rightWrist.x) * canvas.width,
-        (leftWrist.y - rightWrist.y) * canvas.height
-      );
-
-      if (wristDistance < 50) {
-        const wristMid = {
-          x: (leftWrist.x + rightWrist.x) / 2,
-          y: (leftWrist.y + rightWrist.y) / 2
-        };
-        const shoulderMid = {
-          x: (leftShoulder.x + rightShoulder.x) / 2,
-          y: (leftShoulder.y + rightShoulder.y) / 2
-        };
-        drawLine(leftWrist, rightWrist, 'yellow'); // ✅ 手腕連線
-        drawLine(leftShoulder, wristMid, 'yellow'); // ✅ 左肩到手腕中點
-        drawLine(rightShoulder, wristMid, 'yellow'); // ✅ 右肩到手腕中點
-      } else {
-        drawLine(leftShoulder, leftWrist, 'red'); // ✅ 左臂線
-        drawLine(rightShoulder, rightWrist, 'red'); // ✅ 右臂線
-      }
-
-      const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-      const now = Date.now();
-
-      if (!baseline) baseline = shoulderY; // ✅ 初始化肩膀高度基準線
-      const delta = baseline - shoulderY;  // ✅ 與基準線距離變化
-
-      if (!inCompression && delta > 0.05) {
-        // ✅ 偵測進入壓胸階段
-        inCompression = true;
-        const interval = now - lastPeakTime;
-        if (lastPeakTime > 0 && interval < 2000) {
-          intervals.push(interval);
-          if (intervals.length > 3) intervals.shift();
-          rate = Math.round(60000 / interval);
-          const avgMs = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-          avgRate = Math.round(60000 / avgMs);
-          count++;
-        }
-        lastPeakTime = now;
-        statusText.innerText = '壓胸中...';
-      }
-      if (inCompression && delta < 0.03) {
-        // ✅ 偵測離開壓胸階段
-        inCompression = false;
-      }
-
-      rateDisplay.innerText = `速率: ${rate} 次/分`;
-      avgRateDisplay.innerText = `平均速率: ${avgRate} 次/分`;
-      countDisplay.innerText = `按壓次數: ${count}`;
-
-      ctx.restore();
-    }
-
-    // ✅ 初始化 Pose 模型
-    const pose = new window.Pose({
-      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
-    });
-    pose.setOptions({
-      modelComplexity: 0,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-    pose.onResults(onResults);
-
-    // ✅ 啟動攝影機與模型偵測
-    let camera;
-    startButton.onclick = async () => {
-      startButton.style.display = 'none';
-      try {
-        camera = new Camera(video, {
-          facingMode: { ideal: 'environment' }, // ✅ 嘗試後鏡頭
-          onFrame: async () => {
-            await pose.send({ image: video });
-          },
-          width: 1280,
-          height: 720
-        });
-        await camera.start();
-      } catch (err) {
-        alert("無法啟動攝影機：" + err.message);
-        console.error("Camera Error:", err);
-      }
-    };
-  </script>
-</body>
-</html>
-  <div id="instruction">請雙手交疊</div>
-  <button id="startButton">開啟鏡頭</button>
-
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const rateText = document.getElementById('rate');
-    const avgRateText = document.getElementById('avgRate');
-    const countText = document.getElementById('count');
-    const instruction = document.getElementById('instruction');
-    const startButton = document.getElementById('startButton');
-
-    let previousY = null;
-    let lastPressTime = null;
-    let pressCount = 0;
-    let intervals = [];
-    let camera = null;
-
-    function calculateRate(interval) {
-      return Math.round(60000 / interval);
-    }
-
-    function drawLine(p1, p2, color, width = 4) {
-      ctx.beginPath();
-      ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
-      ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.stroke();
-    }
-
-    function onResults(results) {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.save();
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1); // 鏡像顯示
-      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-
-      if (!results.poseLandmarks) {
-        ctx.restore();
-        return;
-      }
-
-      const lm = results.poseLandmarks;
-      const leftShoulder = lm[11];
-      const rightShoulder = lm[12];
-      const leftWrist = lm[15];
-      const rightWrist = lm[16];
-
-      // 藍色雷達線: 雙肩
-      drawLine(leftShoulder, rightShoulder, 'blue');
-
-      // 紅色: 肩到屬手腕
-      drawLine(leftShoulder, leftWrist, 'red');
-      drawLine(rightShoulder, rightWrist, 'red');
-
-      // 黏合臉部位置的手腕別距小
-      const dx = Math.abs(leftWrist.x - rightWrist.x);
-      const dy = Math.abs(leftWrist.y - rightWrist.y);
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      if (distance < 0.08) {
-        instruction.innerText = "壓胸中...";
-
-        const avgShoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-        if (previousY && avgShoulderY - previousY > 0.015) {
-          const now = Date.now();
-          if (lastPressTime) {
-            const interval = now - lastPressTime;
-            intervals.push(interval);
-            if (intervals.length > 3) intervals.shift();
-          }
-          lastPressTime = now;
-          pressCount++;
-        }
-        previousY = avgShoulderY;
-      } else {
-        instruction.innerText = "請雙手交疊";
-        previousY = null;
-      }
-
-      const latestRate = intervals.length > 0 ? calculateRate(intervals[intervals.length - 1]) : 0;
-      const avgRate =
-        intervals.length > 0 ? Math.round(60000 / (intervals.reduce((a, b) => a + b, 0) / intervals.length)) : 0;
-
-      rateText.innerText = `速率: ${latestRate} 次/分`;
-      avgRateText.innerText = `平均速率: ${avgRate} 次/分`;
-      countText.innerText = `按壓次數: ${pressCount}`;
-      ctx.restore();
-    }
-
-    startButton.addEventListener('click', async () => {
-      startButton.style.display = 'none';
-      const pose = new Pose({
-        locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}`
-      });
-      pose.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-      pose.onResults(onResults);
-
-      camera = new Camera(video, {
-        onFrame: async () => {
-          await pose.send({ image: video });
-        },
-        width: 640,
-        height: 480
-      });
-      camera.start();
-    });
   </script>
 </body>
 </html>
