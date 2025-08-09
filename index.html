@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.9</title>
+  <title>CPR 偵測系統 V5.10</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -13,37 +13,43 @@
       position: absolute;
       top: 0;
       left: 0;
-      /* 用 100dvh 避免手機瀏覽器位址列收展造成的高度誤差 */
-      width: 100vw;
-      height: 100dvh;
-      object-fit: cover;         /* ← 讓兩者等比填滿，避免黑邊錯位 */
+      width: 100vw;  /* 用 100dvh 避免手機瀏覽器位址列收展造成的高度誤差 */
+      height: 100dvh;          /* 避免手機瀏覽器地址列影響高度 */
+      object-fit: cover;       /* ← 讓兩者等比填滿，避免黑邊錯位 */
     }
-/* 刪掉原本 video { transform: scaleX(-1) } */
-  .mirror {
-    transform: scaleX(-1);     /* ← 需要鏡像時再加這個 class */
-    transform-origin: center;
-  }
-/* 新增：左上角 HUD（DOM，不再用 canvas 寫字） */
-#hud {
-  position: absolute;
-  top: 0; left: 0;
-  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px;
-  z-index: 4;
-  display: grid;
-  gap: 6px;
-  background: rgba(0,0,0,0.55);   /* 半透明底 */
-  border-bottom-right-radius: 14px;
-  /* RWD 字級：手機不太小、桌機不太大 */
-  font: bold clamp(18px, 2.4vw, 36px) / 1.1 sans-serif;
-  color: #fff;
-  pointer-events: none;           /* 點不到 HUD，避免擋到切換鈕 */
-}
-#hud .row { white-space: nowrap; }
-#hud .val  { margin-left: 6px; }
-    
-    canvas {
-      z-index: 1;
+    .mirror {                   /* 需要鏡像時加上這個 class */
+      transform: scaleX(-1);
+      transform-origin: center;
     }
+
+    /* 新增：左上角 HUD（DOM，不再用 canvas 寫字） */
+    /* DOM HUD（用它顯示速率/次數） */
+    #hud {
+      position: absolute;
+      top: 0; left: 0;
+      padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px;
+      z-index: 4;
+      display: grid;
+      gap: 6px;
+      background: rgba(0,0,0,0.55);  /* 半透明底 */
+      border-bottom-right-radius: 14px;
+      /* RWD 字級：手機不太小、桌機不太大 */
+      font: bold clamp(18px, 2.4vw, 36px) / 1.1 sans-serif;
+      color: #fff;
+      pointer-events: none;     /* 點不到 HUD，避免擋到切換鈕 */
+    }
+    #hud .row { white-space: nowrap; }
+    #hud .val { margin-left: 6px; }
+
+    /* 橫式時把 HUD 移到右上，避免被畫面內容擠到 */
+    @media (orientation: landscape) {
+      #hud {
+        left: auto;
+        right: 12px;
+      }
+    }
+
+    canvas { z-index: 1; }
     #startBtn {
       position: absolute;
       top: 40%;
@@ -63,12 +69,19 @@
 <body>
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
+    <div class="row">平均速率：<span id="bpmAvg">--</span> 次/分</div>
+    <div class="row">按壓次數：<span id="pressCnt">0</span> 次</div>
+  </div>
+
   <button id="startBtn">開啟鏡頭</button>
-  <div id="camSwitch" style="
-  position:absolute; top:12px; right:12px; z-index:3; display:flex; gap:8px;">
-  <button data-mode="user" style="padding:8px 12px; border-radius:8px;">前鏡頭</button>
-  <button data-mode="environment" style="padding:8px 12px; border-radius:8px;">後鏡頭</button>
-</div>
+
+  <div id="camSwitch" style="position:absolute; top:12px; right:12px; z-index:3; display:flex; gap:8px;">
+    <button data-mode="user" style="padding:8px 12px; border-radius:8px;">前鏡頭</button>
+    <button data-mode="environment" style="padding:8px 12px; border-radius:8px;">後鏡頭</button>
+  </div>
 
 
 <!-- MediaPipe Pose + Camera Utilities（CDN） -->
@@ -76,26 +89,25 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-  // ---- 基本 DOM ----
-  const video    = document.getElementById("video");
-  const canvas   = document.getElementById("canvas");
-  const ctx      = canvas.getContext("2d");
-  const startBtn = document.getElementById("startBtn");
-  const camSwitch= document.getElementById("camSwitch");
+  // ===== DOM =====
+  const video     = document.getElementById("video");
+  const canvas    = document.getElementById("canvas");
+  const ctx       = canvas.getContext("2d");
+  const startBtn  = document.getElementById("startBtn");
+  const camSwitch = document.getElementById("camSwitch");
+  // DOM HUD
+  const elBpmNow  = document.getElementById("bpmNow");
+  const elBpmAvg  = document.getElementById("bpmAvg");
+  const elPress   = document.getElementById("pressCnt");
 
-  // ---- 安全檢查 ----
-  if (!window.Pose || !window.Camera) {
-    console.error("MediaPipe 尚未載入");
-  }
-
-  // ---- MediaPipe 索引 ----
+  // ===== MediaPipe 索引 =====
   const L_SHOULDER = 11, R_SHOULDER = 12;
   const L_ELBOW    = 13, R_ELBOW    = 14;
   const L_WRIST    = 15, R_WRIST    = 16;
 
-  // ---- 平滑參數 ----
+  // ===== 平滑 =====
   const smoothStore = {};
-  const SMOOTH_ALPHA = 0.65; // 稍微再穩一點
+  const SMOOTH_ALPHA = 0.65;
   function smoothPoint(idx, raw, w, h) {
     if (!raw) return null;
     const x = raw.x * w, y = raw.y * h;
@@ -107,39 +119,58 @@
     return smoothStore[idx];
   }
 
-  // ---- 畫圖小工具（在鏡像座標系下呼叫）----
+  // ===== 畫圖工具（在正確座標系下呼叫） =====
   function drawCircle(p, r, color) {
     if (!p) return;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
     ctx.fillStyle = color; ctx.fill();
   }
   function drawLine(a, b, w, color) {
     if (!a || !b) return;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
     ctx.lineWidth = w; ctx.strokeStyle = color; ctx.stroke();
   }
 
-  // ---- 相機/姿勢狀態 ----
-  let pose = null;
-  let camera = null;
-  let currentFacing = "user";          // 預設前鏡頭
+  // ===== 相機/姿勢狀態  =====
+  let pose = null; 
+  let camera = null; 
+  let currentFacing = "user";  // 預設前鏡頭
 
-  // 手腕交疊狀態（含遲滯避免抖動）
-  let wristsOverlapped = false;
-  let OVERLAP_ON_PX = 30;              // 進入交疊門檻
-  let OVERLAP_OFF_PX = 48;             // 釋放門檻（> ON 的 1.6 倍）
+  let wristsOverlapped = false;   // 手腕交疊狀態（含遲滯避免抖動）
+  let OVERLAP_ON_PX = 30; // 進入交疊門檻
+  let OVERLAP_OFF_PX = 48; // 釋放門檻（> ON 的 1.6 倍）
 
-  // ---- 啟動/切換相機（Camera Utils）----
+  // HiDPI 同步
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  function syncCanvasToVideo() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return;
+    canvas.width  = Math.round(vw * dpr);
+    canvas.height = Math.round(vh * dpr);
+    canvas.style.width = vw + "px";
+    canvas.style.height = vh + "px";
+  }
+
+  // ===== 指標計算（只在交疊期間更新）=====
+  let prevWristsOverlapped = false;
+  let yBuf = [], lastExtrema = null, peakTimes = [];
+  let pressCount = 0, bpmNow = 0, bpmAvg30 = null;
+
+  function resetMetrics() {
+    yBuf = []; lastExtrema = null; peakTimes = [];
+    pressCount = 0; bpmNow = 0; bpmAvg30 = null;
+  }
+  function bpmFromPeaks(times, N) {
+    if (times.length < N) return 0;
+    const t1 = times[times.length - N], t2 = times[times.length - 1];
+    const span = t2 - t1, cycles = N - 1;
+    return span > 0 ? (cycles / span) * 60 : 0;
+  }
+
+  // ===== 啟動 / 切換相機（Camera Utils） =====
   async function initPose(facingMode = "user") {
-    // 停掉舊相機
-    if (camera && camera.stop) {
-      try { await camera.stop(); } catch (e) { console.warn(e); }
-    }
-
-    // 建立 Pose（只建一次）
+    if (camera && camera.stop) { try { await camera.stop(); } catch(_){} }
+  // 建立 Pose（只建一次）
     if (!pose) {
       pose = new window.Pose({
         locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
@@ -154,242 +185,129 @@
       pose.onResults(onPoseResults);
     }
 
-    // 依裝置解析度調整交疊門檻（用短邊 3% / 5%）
-    const vw = video.videoWidth  || 640;
-    const vh = video.videoHeight || 480;
-    const base = Math.min(vw, vh);
-    OVERLAP_ON_PX  = Math.max(24, base * 0.03); // 至少 24px
-    OVERLAP_OFF_PX = Math.max(36, base * 0.05);
-
-    // 重新啟動 Camera
     camera = new Camera(video, {
       onFrame: async () => { await pose.send({ image: video }); },
-      width: 640,
-      height: 480,
-      facingMode, // "user" or "environment"
+      width: 640, height: 480, facingMode
     });
 
-    video.addEventListener("loadeddata", () => {
-      if (video.videoWidth && video.videoHeight) {
-          syncCanvasToVideo();
-
-      }
-    }, { once: true });
+    video.addEventListener("loadeddata", () => { syncCanvasToVideo(); }, { once:true });
 
     await camera.start();
-    // 依鏡頭決定是否鏡像顯示
+
+    // 視訊鏡像：只在前鏡頭
     const isMirrored = (facingMode === "user");
     video.classList.toggle("mirror", isMirrored);
     currentFacing = facingMode;
+
+    // 依裝置解析度調整交疊門檻（用短邊 3% / 5%）
+    const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
+    const base = Math.min(vw, vh);
+    OVERLAP_ON_PX  = Math.max(24, base * 0.03);  // 至少 24px
+    OVERLAP_OFF_PX = Math.max(36, base * 0.05);
   }
-const dpr = Math.max(1, window.devicePixelRatio || 1);
-function syncCanvasToVideo() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (!vw || !vh) return;
-  // 內部像素（實體像素）
-  canvas.width  = Math.round(vw * dpr);
-  canvas.height = Math.round(vh * dpr);
-  // CSS 尺寸（和 <video> 一樣）
-  canvas.style.width  = vw + "px";
-  canvas.style.height = vh + "px";
-}
-syncCanvasToVideo();
-const wCss = video.videoWidth || canvas.width / dpr;
-const hCss = video.videoHeight || canvas.height / dpr;
 
-// 重設座標轉換：先把座標系調回「CSS 像素」，再做鏡像
-ctx.setTransform(dpr, 0, 0, dpr, 0, 0);  // 1 CSS px = dpr 實體 px
-ctx.clearRect(0, 0, wCss, hCss);
-const isMirrored = (currentFacing === "user");
-if (isMirrored) { ctx.translate(wCss, 0); ctx.scale(-1, 1); }
-
-  
-  // ---- 每幀結果：只畫肩與手臂 + 交疊切換 ----
+  // ===== 每幀繪製：只畫肩與手臂 + 交疊切換=====
   function onPoseResults(results) {
-    const landmarks = results.poseLandmarks;
-    if (!landmarks) return;
+    const lm = results.poseLandmarks;
+    if (!lm) return;
 
-    const w = canvas.width  = video.videoWidth  || canvas.width;
-    const h = canvas.height = video.videoHeight || canvas.height;
+    syncCanvasToVideo();
 
-    ctx.save();
-    ctx.clearRect(0, 0, w, h);
+    // 將座標系設為「CSS 像素」再處理鏡像
+    const wCss = video.videoWidth || canvas.width / dpr;
+    const hCss = video.videoHeight || canvas.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 1 CSS px = dpr 實體 px
+    ctx.clearRect(0, 0, wCss, hCss);
+    if (currentFacing === "user") { ctx.translate(wCss, 0); ctx.scale(-1, 1); }
 
-   // 只有前鏡頭才鏡像，讓線條與影片一致
-    const isMirrored = (currentFacing === "user");
-    if (isMirrored) {
-      ctx.translate(w, 0);
-      ctx.scale(-1, 1);
-    }
+    // 取點（已平滑）平滑後座標
+    const ls = smoothPoint(L_SHOULDER, lm[L_SHOULDER], wCss, hCss);
+    const rs = smoothPoint(R_SHOULDER, lm[R_SHOULDER], wCss, hCss);
+    const le = smoothPoint(L_ELBOW,    lm[L_ELBOW],    wCss, hCss);
+    const re = smoothPoint(R_ELBOW,    lm[R_ELBOW],    wCss, hCss);
+    const lw = smoothPoint(L_WRIST,    lm[L_WRIST],    wCss, hCss);
+    const rw = smoothPoint(R_WRIST,    lm[R_WRIST],    wCss, hCss);
 
-    // 平滑後座標
-    const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], wCss, hCss);
-    const rs = smoothPoint(R_SHOULDER, landmarks[R_SHOULDER], wCss, hCss);
-    const le = smoothPoint(L_ELBOW,    landmarks[L_ELBOW],    wCss, hCss);
-    const re = smoothPoint(R_ELBOW,    landmarks[R_ELBOW],    wCss, hCss);
-    const lw = smoothPoint(L_WRIST,    landmarks[L_WRIST],    wCss, hCss);
-    const rw = smoothPoint(R_WRIST,    landmarks[R_WRIST],    wCss, hCss);
-
-    // 手腕交疊判斷（遲滯）
+    // 手腕交疊（遲滯）手腕交疊判斷
     let mergedWrist = null;
     if (lw && rw) {
       const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
-      if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
-        wristsOverlapped = true;
-      } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
-        wristsOverlapped = false;
-      }
-      if (wristsOverlapped) mergedWrist = { x: (lw.x + rw.x)/2, y: (lw.y + rw.y)/2 };
+      if (!wristsOverlapped && dist < OVERLAP_ON_PX) wristsOverlapped = true;
+      else if (wristsOverlapped && dist > OVERLAP_OFF_PX) wristsOverlapped = false;
+      if (wristsOverlapped) mergedWrist = { x:(lw.x+rw.x)/2, y:(lw.y+rw.y)/2 };
     }
 
-    // 點
-    drawCircle(ls, 6, "#00BFFF");
-    drawCircle(rs, 6, "#00BFFF");
+    // 肩膀線（藍）
+    drawCircle(ls, 6, "#00BFFF"); drawCircle(rs, 6, "#00BFFF");  // 點
+    drawLine(ls, rs, 6, "#1E90FF");  // 肩膀連線（藍）
 
-    // 肩膀連線（藍）
-    drawLine(ls, rs, 6, "#1E90FF");
-
+    // 手臂
     if (wristsOverlapped && mergedWrist) {
-      // 交疊模式：黃線倒三角、單一手腕點
-      drawLine(ls, mergedWrist, 8, "#FFC107");
+      drawLine(ls, mergedWrist, 8, "#FFC107");  // 交疊模式：黃線倒三角、單一手腕點
       drawLine(rs, mergedWrist, 8, "#FFC107");
       drawCircle(mergedWrist, 7, "#FFC107");
-      // 手肘可選擇顯示或隱藏，這裡改為隱藏更清楚
-      // （若要顯示，把下面兩行解除註解）
-      // drawCircle(le, 5, "#FFD54D");
-      // drawCircle(re, 5, "#FFD54D");
     } else {
-      // 一般模式：紅色手臂（肩→肘→腕），手腕各自顯示
       drawCircle(le, 5, "#FF4D4F"); drawCircle(re, 5, "#FF4D4F");
       drawCircle(lw, 5, "#FF4D4F"); drawCircle(rw, 5, "#FF4D4F");
       drawLine(ls, le, 6, "#FF3333"); drawLine(le, lw, 6, "#FF3333");
       drawLine(rs, re, 6, "#FF3333"); drawLine(re, rw, 6, "#FF3333");
     }
 
-    ctx.restore();
+    // ---- 雙腕交疊 gating（與你現有 wristsOverlapped 同步）----
+    // ===== 計速（只在交疊期間更新；分開凍結）=====
+    const nowSec = Date.now() / 1000;
+    // 交疊狀態切換：從「未交疊→交疊」時重置計算
+    if (wristsOverlapped && !prevWristsOverlapped) resetMetrics();
+    prevWristsOverlapped = wristsOverlapped;
 
-    // ... 你原本的 ls/rs/le/re/lw/rw 取點
+    // ---- 只有在交疊期間才更新速率 ----
+    if (wristsOverlapped && ls && rs) {
 
-// ---- 雙腕交疊 gating（與你現有 wristsOverlapped 同步）----
-const nowSec = Date.now() / 1000;
+      // 兩肩平均 y（畫面座標，數值越大代表越往下）
+      const avgY = (ls.y + rs.y) / 2;
+      yBuf.push({ t: nowSec, y: avgY });
+      if (yBuf.length > 3) yBuf.shift();
 
-// 交疊狀態切換：從「未交疊→交疊」時重置計算
-if (wristsOverlapped && !prevWristsOverlapped) {
-  resetMetrics();
-}
-prevWristsOverlapped = wristsOverlapped;
+      // 用最近 3 筆判斷局部極值
 
-// ---- 只有在交疊期間才更新速率 ----
-if (wristsOverlapped && ls && rs) {
-  // 兩肩平均 y（畫面座標，數值越大代表越往下）
-  const avgY = (ls.y + rs.y) / 2;
-  yBuf.push({ t: nowSec, y: avgY });
-  if (yBuf.length > 3) yBuf.shift();
+      if (yBuf.length === 3) {  
+        const [a, b, c] = yBuf;
+        const isPeak   = (b.y > a.y && b.y > c.y);
+        const isValley = (b.y < a.y && b.y < c.y);
 
-  // 用最近 3 筆判斷局部極值
-  if (yBuf.length === 3) {
-    const [a, b, c] = yBuf;
-    const isPeak   = (b.y > a.y && b.y > c.y);
-    const isValley = (b.y < a.y && b.y < c.y);
-
-    if (isPeak && lastExtrema === 'valley') {
-      // 完成一個「峰-谷-峰」循環 → 計一次
-      pressCount++;
-      peakTimes.push(b.t);
-
-      // 即時速率：用最近 5 次峰算（不足 5 顯示 0）
-      bpmNow = bpmFromPeaks(peakTimes, 5);
-
-      // 平均速率：用最近 30 次峰的時間跨度（不足 30 顯示 null）
-      bpmAvg30 = peakTimes.length >= 30 ? bpmFromPeaks(peakTimes, 30) : null;
-
-      lastExtrema = 'peak';
-    } else if (isPeak) {
-      lastExtrema = 'peak';
-    } else if (isValley) {
-      lastExtrema = 'valley';
+        if (isPeak && lastExtrema === "valley") {
+          // 完成一個「峰-谷-峰」循環 → 計一次
+          pressCount++;
+          peakTimes.push(b.t);
+          // 即時速率：用最近 5 次峰算（不足 5 顯示 0）
+          bpmNow  = bpmFromPeaks(peakTimes, 5);
+          // 平均速率：用最近 30 次峰的時間跨度（不足 30 顯示 null）
+          bpmAvg30 = peakTimes.length >= 30 ? bpmFromPeaks(peakTimes, 30) : null;
+          lastExtrema = "peak";
+        } else if (isPeak)   lastExtrema = "peak";
+          else if (isValley) lastExtrema = "valley";
+      }
     }
-  }
-}
 
-// =======（這裡是你原本的畫線程式，保持不變）=======
-// …肩膀藍線、一般模式紅線 / 交疊模式黃線 …
-// ================================================
-
-ctx.restore();
-
-
-  // 更新 HUD（DOM）：分開時維持上次數值；再次交疊會在 resetMetrics() 歸零
-elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : '--';
-elBpmAvg.textContent = (bpmAvg30 && bpmAvg30 > 0) ? Math.round(bpmAvg30) : '--';
-elPress.textContent  = pressCount;
-@media (orientation: landscape) {
-  #hud { font-size: clamp(16px, 1.8vw, 32px); }
-}
-
+    // ===== 更新 HUD（DOM）=====
+    elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : "--";
+    elBpmAvg.textContent = (bpmAvg30 && bpmAvg30 > 0) ? Math.round(bpmAvg30) : "--";
+    elPress.textContent  = pressCount;
   }
 
-  // ---- 啟動與切換事件 ----
+  // ===== 事件 =====
   startBtn.addEventListener("click", async () => {
-    try {
-      await initPose(currentFacing);
-      startBtn.style.display = "none";
-    } catch (err) {
-      alert("⚠️ 無法啟用鏡頭：" + err.message);
-      console.error(err);
-    }
+    try { await initPose(currentFacing); startBtn.style.display = "none"; }
+    catch (err) { alert("⚠️ 無法啟用鏡頭：" + err.message); console.error(err); }
   });
 
-  // 點選切換鏡頭（啟動後也可即時切）
   camSwitch.addEventListener("click", async (e) => {
-    const btn = e.target.closest("button[data-mode]");
-    if (!btn) return;
-    const mode = btn.getAttribute("data-mode"); // "user" or "environment"
+    const btn = e.target.closest("button[data-mode]"); if (!btn) return;
+    const mode = btn.getAttribute("data-mode");        // "user" | "environment"
     try { await initPose(mode); } catch (err) { console.error(err); }
   });
-
-  // ---- 速率與計數（僅雙腕交疊時運作；分開凍結；再次交疊歸零）----
-let prevWristsOverlapped = false;
-let yBuf = [];                  // 最近 3 筆肩膀平均 y
-let lastExtrema = null;         // 'peak' | 'valley'
-let peakTimes = [];             // 每次「峰」時間（秒）
-let pressCount = 0;
-let bpmNow = 0;                 // 以最近 5 次計算
-let bpmAvg30 = null;            // 以最近 30 次計算（不足 30 顯示 '--'）
-
-function resetMetrics() {
-  yBuf = [];
-  lastExtrema = null;
-  peakTimes = [];
-  pressCount = 0;
-  bpmNow = 0;
-  bpmAvg30 = null;
-}
-
-// 以最近 N 次峰值時間，換算 bpm
-function bpmFromPeaks(times, N) {
-  if (times.length < N) return 0;
-  const t1 = times[times.length - N];
-  const t2 = times[times.length - 1];
-  const cycles = N - 1;                 // N 個峰有 N-1 個完整週期
-  const span = t2 - t1;                 // 秒
-  return span > 0 ? (cycles / span) * 60 : 0;
-}
-
-function drawHUD() {
-  ctx.fillStyle = "rgba(0,0,0,0.65)";
-  ctx.fillRect(12, 12, 420, 120);
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 28px sans-serif";
-  ctx.fillText(`即時速率：${bpmNow ? Math.round(bpmNow) : '--'} 次/分`, 24, 52);
-  ctx.fillText(`平均速率：${bpmAvg30 ? Math.round(bpmAvg30) : '--'} 次/分`, 24, 88);
-  ctx.fillText(`按壓次數：${pressCount} 次`, 24, 124);
-}
-const elBpmNow  = document.getElementById("bpmNow");
-const elBpmAvg  = document.getElementById("bpmAvg");
-const elPress   = document.getElementById("pressCnt");
-
 </script>
+
 
 <div id="hud">
   <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
