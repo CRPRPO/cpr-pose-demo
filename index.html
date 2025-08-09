@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.8</title>
+  <title>CPR 偵測系統 V5.9</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -10,19 +10,37 @@
       background: black;
     }
     video, canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  object-fit: cover;         /* ← 讓兩者等比填滿，避免黑邊錯位 */
-}
+      position: absolute;
+      top: 0;
+      left: 0;
+      /* 用 100dvh 避免手機瀏覽器位址列收展造成的高度誤差 */
+      width: 100vw;
+      height: 100dvh;
+      object-fit: cover;         /* ← 讓兩者等比填滿，避免黑邊錯位 */
+    }
 /* 刪掉原本 video { transform: scaleX(-1) } */
-.mirror {
-  transform: scaleX(-1);     /* ← 需要鏡像時再加這個 class */
-  transform-origin: center;
+  .mirror {
+    transform: scaleX(-1);     /* ← 需要鏡像時再加這個 class */
+    transform-origin: center;
+  }
+/* 新增：左上角 HUD（DOM，不再用 canvas 寫字） */
+#hud {
+  position: absolute;
+  top: 0; left: 0;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px;
+  z-index: 4;
+  display: grid;
+  gap: 6px;
+  background: rgba(0,0,0,0.55);   /* 半透明底 */
+  border-bottom-right-radius: 14px;
+  /* RWD 字級：手機不太小、桌機不太大 */
+  font: bold clamp(18px, 2.4vw, 36px) / 1.1 sans-serif;
+  color: #fff;
+  pointer-events: none;           /* 點不到 HUD，避免擋到切換鈕 */
 }
-
+#hud .row { white-space: nowrap; }
+#hud .val  { margin-left: 6px; }
+    
     canvas {
       z-index: 1;
     }
@@ -153,8 +171,8 @@
 
     video.addEventListener("loadeddata", () => {
       if (video.videoWidth && video.videoHeight) {
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
+          syncCanvasToVideo();
+
       }
     }, { once: true });
 
@@ -164,7 +182,28 @@
     video.classList.toggle("mirror", isMirrored);
     currentFacing = facingMode;
   }
+const dpr = Math.max(1, window.devicePixelRatio || 1);
+function syncCanvasToVideo() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  // 內部像素（實體像素）
+  canvas.width  = Math.round(vw * dpr);
+  canvas.height = Math.round(vh * dpr);
+  // CSS 尺寸（和 <video> 一樣）
+  canvas.style.width  = vw + "px";
+  canvas.style.height = vh + "px";
+}
+syncCanvasToVideo();
+const wCss = video.videoWidth || canvas.width / dpr;
+const hCss = video.videoHeight || canvas.height / dpr;
 
+// 重設座標轉換：先把座標系調回「CSS 像素」，再做鏡像
+ctx.setTransform(dpr, 0, 0, dpr, 0, 0);  // 1 CSS px = dpr 實體 px
+ctx.clearRect(0, 0, wCss, hCss);
+const isMirrored = (currentFacing === "user");
+if (isMirrored) { ctx.translate(wCss, 0); ctx.scale(-1, 1); }
+
+  
   // ---- 每幀結果：只畫肩與手臂 + 交疊切換 ----
   function onPoseResults(results) {
     const landmarks = results.poseLandmarks;
@@ -184,12 +223,12 @@
     }
 
     // 平滑後座標
-    const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], w, h);
-    const rs = smoothPoint(R_SHOULDER, landmarks[R_SHOULDER], w, h);
-    const le = smoothPoint(L_ELBOW,    landmarks[L_ELBOW],    w, h);
-    const re = smoothPoint(R_ELBOW,    landmarks[R_ELBOW],    w, h);
-    const lw = smoothPoint(L_WRIST,    landmarks[L_WRIST],    w, h);
-    const rw = smoothPoint(R_WRIST,    landmarks[R_WRIST],    w, h);
+    const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], wCss, hCss);
+    const rs = smoothPoint(R_SHOULDER, landmarks[R_SHOULDER], wCss, hCss);
+    const le = smoothPoint(L_ELBOW,    landmarks[L_ELBOW],    wCss, hCss);
+    const re = smoothPoint(R_ELBOW,    landmarks[R_ELBOW],    wCss, hCss);
+    const lw = smoothPoint(L_WRIST,    landmarks[L_WRIST],    wCss, hCss);
+    const rw = smoothPoint(R_WRIST,    landmarks[R_WRIST],    wCss, hCss);
 
     // 手腕交疊判斷（遲滯）
     let mergedWrist = null;
@@ -279,13 +318,15 @@ if (wristsOverlapped && ls && rs) {
 
 ctx.restore();
 
-// ---- 非鏡像 HUD：分開時數字凍結；再次交疊會重置為 0 ----
-drawHUD();
 
-    // 這裡（非鏡像區）可畫你的左上角 HUD
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 28px sans-serif";
-    ctx.fillText("即時速率：xxx 次/分", 20, 40);
+  // 更新 HUD（DOM）：分開時維持上次數值；再次交疊會在 resetMetrics() 歸零
+elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : '--';
+elBpmAvg.textContent = (bpmAvg30 && bpmAvg30 > 0) ? Math.round(bpmAvg30) : '--';
+elPress.textContent  = pressCount;
+@media (orientation: landscape) {
+  #hud { font-size: clamp(16px, 1.8vw, 32px); }
+}
+
   }
 
   // ---- 啟動與切換事件 ----
@@ -344,9 +385,17 @@ function drawHUD() {
   ctx.fillText(`平均速率：${bpmAvg30 ? Math.round(bpmAvg30) : '--'} 次/分`, 24, 88);
   ctx.fillText(`按壓次數：${pressCount} 次`, 24, 124);
 }
+const elBpmNow  = document.getElementById("bpmNow");
+const elBpmAvg  = document.getElementById("bpmAvg");
+const elPress   = document.getElementById("pressCnt");
 
 </script>
 
+<div id="hud">
+  <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
+  <div class="row">平均速率：<span id="bpmAvg">--</span> 次/分</div>
+  <div class="row">按壓次數：<span id="pressCnt">0</span> 次</div>
+</div>
 
 </body>
 </html>
