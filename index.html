@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.6</title>
+  <title>CPR 偵測系統 V5.7</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -55,15 +55,17 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-  // 檢查外部套件是否載入
+  // ---- 基本 DOM ----
+  const video    = document.getElementById("video");
+  const canvas   = document.getElementById("canvas");
+  const ctx      = canvas.getContext("2d");
+  const startBtn = document.getElementById("startBtn");
+  const camSwitch= document.getElementById("camSwitch");
+
+  // ---- 安全檢查 ----
   if (!window.Pose || !window.Camera) {
     console.error("MediaPipe 尚未載入");
   }
-
-  const video   = document.getElementById("video");
-  const canvas  = document.getElementById("canvas");
-  const ctx     = canvas.getContext("2d");
-  const startBtn= document.getElementById("startBtn");
 
   // ---- MediaPipe 索引 ----
   const L_SHOULDER = 11, R_SHOULDER = 12;
@@ -72,62 +74,80 @@
 
   // ---- 平滑參數 ----
   const smoothStore = {};
-  const SMOOTH_ALPHA = 0.6;
+  const SMOOTH_ALPHA = 0.65; // 稍微再穩一點
   function smoothPoint(idx, raw, w, h) {
     if (!raw) return null;
     const x = raw.x * w, y = raw.y * h;
-    const prev = smoothStore[idx];
-    smoothStore[idx] = prev
-      ? { x: SMOOTH_ALPHA * prev.x + (1 - SMOOTH_ALPHA) * x,
-          y: SMOOTH_ALPHA * prev.y + (1 - SMOOTH_ALPHA) * y }
+    const p = smoothStore[idx];
+    smoothStore[idx] = p
+      ? { x: SMOOTH_ALPHA * p.x + (1 - SMOOTH_ALPHA) * x,
+          y: SMOOTH_ALPHA * p.y + (1 - SMOOTH_ALPHA) * y }
       : { x, y };
     return smoothStore[idx];
   }
 
+  // ---- 畫圖小工具（在鏡像座標系下呼叫）----
   function drawCircle(p, r, color) {
     if (!p) return;
     ctx.beginPath();
     ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
+    ctx.fillStyle = color; ctx.fill();
   }
-  function drawLine(a, b, width, color) {
+  function drawLine(a, b, w, color) {
     if (!a || !b) return;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = width;
-    ctx.strokeStyle = color;
-    ctx.stroke();
+    ctx.lineWidth = w; ctx.strokeStyle = color; ctx.stroke();
   }
 
+  // ---- 相機/姿勢狀態 ----
   let pose = null;
   let camera = null;
+  let currentFacing = "user";          // 預設前鏡頭
 
-  async function initPose() {
-    console.log("Pose?", window.Pose, "Camera?", window.Camera);
-    
-    pose = new window.Pose({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-});
-    
-    pose.setOptions({
-      modelComplexity: 0,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
-    pose.onResults(onPoseResults);
+  // 手腕交疊狀態（含遲滯避免抖動）
+  let wristsOverlapped = false;
+  let OVERLAP_ON_PX = 30;              // 進入交疊門檻
+  let OVERLAP_OFF_PX = 48;             // 釋放門檻（> ON 的 1.6 倍）
 
-    // Camera Utils 會自己開鏡與取流
+  // ---- 啟動/切換相機（Camera Utils）----
+  async function initPose(facingMode = "user") {
+    // 停掉舊相機
+    if (camera && camera.stop) {
+      try { await camera.stop(); } catch (e) { console.warn(e); }
+    }
+
+    // 建立 Pose（只建一次）
+    if (!pose) {
+      pose = new window.Pose({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}`,
+      });
+      pose.setOptions({
+        modelComplexity: 0,
+        smoothLandmarks: true,
+        enableSegmentation: false,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+      pose.onResults(onPoseResults);
+    }
+
+    // 依裝置解析度調整交疊門檻（用短邊 3% / 5%）
+    const vw = video.videoWidth  || 640;
+    const vh = video.videoHeight || 480;
+    const base = Math.min(vw, vh);
+    OVERLAP_ON_PX  = Math.max(24, base * 0.03); // 至少 24px
+    OVERLAP_OFF_PX = Math.max(36, base * 0.05);
+
+    // 重新啟動 Camera
     camera = new Camera(video, {
       onFrame: async () => { await pose.send({ image: video }); },
       width: 640,
       height: 480,
+      facingMode, // "user" or "environment"
     });
 
-    // 等到 video 有尺寸後把 canvas 同步
     video.addEventListener("loadeddata", () => {
       if (video.videoWidth && video.videoHeight) {
         canvas.width  = video.videoWidth;
@@ -136,8 +156,10 @@
     }, { once: true });
 
     await camera.start();
+    currentFacing = facingMode;
   }
 
+  // ---- 每幀結果：只畫肩與手臂 + 交疊切換 ----
   function onPoseResults(results) {
     const landmarks = results.poseLandmarks;
     if (!landmarks) return;
@@ -148,10 +170,11 @@
     ctx.save();
     ctx.clearRect(0, 0, w, h);
 
-    // 鏡像座標，和你的鏡像影片一致
+    // 鏡像（與 <video> 一致）
     ctx.translate(w, 0);
     ctx.scale(-1, 1);
 
+    // 平滑後座標
     const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], w, h);
     const rs = smoothPoint(R_SHOULDER, landmarks[R_SHOULDER], w, h);
     const le = smoothPoint(L_ELBOW,    landmarks[L_ELBOW],    w, h);
@@ -159,102 +182,70 @@
     const lw = smoothPoint(L_WRIST,    landmarks[L_WRIST],    w, h);
     const rw = smoothPoint(R_WRIST,    landmarks[R_WRIST],    w, h);
 
+    // 手腕交疊判斷（遲滯）
+    let mergedWrist = null;
+    if (lw && rw) {
+      const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
+      if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
+        wristsOverlapped = true;
+      } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
+        wristsOverlapped = false;
+      }
+      if (wristsOverlapped) mergedWrist = { x: (lw.x + rw.x)/2, y: (lw.y + rw.y)/2 };
+    }
+
     // 點
     drawCircle(ls, 6, "#00BFFF");
     drawCircle(rs, 6, "#00BFFF");
-    drawCircle(le, 5, "#FF4D4F");
-    drawCircle(re, 5, "#FF4D4F");
-    drawCircle(lw, 5, "#FF4D4F");
-    drawCircle(rw, 5, "#FF4D4F");
 
-    // 線：肩膀藍、手臂紅
+    // 肩膀連線（藍）
     drawLine(ls, rs, 6, "#1E90FF");
-    drawLine(ls, le, 6, "#FF3333"); drawLine(le, lw, 6, "#FF3333");
-    drawLine(rs, re, 6, "#FF3333"); drawLine(re, rw, 6, "#FF3333");
+
+    if (wristsOverlapped && mergedWrist) {
+      // 交疊模式：黃線倒三角、單一手腕點
+      drawLine(ls, mergedWrist, 8, "#FFC107");
+      drawLine(rs, mergedWrist, 8, "#FFC107");
+      drawCircle(mergedWrist, 7, "#FFC107");
+      // 手肘可選擇顯示或隱藏，這裡改為隱藏更清楚
+      // （若要顯示，把下面兩行解除註解）
+      // drawCircle(le, 5, "#FFD54D");
+      // drawCircle(re, 5, "#FFD54D");
+    } else {
+      // 一般模式：紅色手臂（肩→肘→腕），手腕各自顯示
+      drawCircle(le, 5, "#FF4D4F"); drawCircle(re, 5, "#FF4D4F");
+      drawCircle(lw, 5, "#FF4D4F"); drawCircle(rw, 5, "#FF4D4F");
+      drawLine(ls, le, 6, "#FF3333"); drawLine(le, lw, 6, "#FF3333");
+      drawLine(rs, re, 6, "#FF3333"); drawLine(re, rw, 6, "#FF3333");
+    }
 
     ctx.restore();
 
-    // 這裡畫非鏡像 HUD（若有）
+    // 這裡（非鏡像區）可畫你的左上角 HUD
     // ctx.fillStyle = "#fff";
     // ctx.font = "bold 28px sans-serif";
     // ctx.fillText("即時速率：xxx 次/分", 20, 40);
   }
 
-  // 只做一件事：按下去啟動 Pose/Camera
+  // ---- 啟動與切換事件 ----
   startBtn.addEventListener("click", async () => {
     try {
-      await initPose();
-      const camSwitch = document.getElementById("camSwitch");
-let currentFacing = "user";   // 預設前鏡頭
-
-async function initPose(facingMode = "user") {
-  // 若已存在 camera，先停掉
-  if (camera && camera.stop) {
-    try { camera.stop(); } catch (_) {}
-  }
-
-  if (!pose) {
-    pose = new window.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-    pose.setOptions({
-      modelComplexity: 0,
-      smoothLandmarks: true,
-      enableSegmentation: false,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
-    pose.onResults(onPoseResults);
-  }
-
-  // 用 Camera Utils，嘗試帶入 facingMode
-  camera = new Camera(video, {
-    onFrame: async () => { await pose.send({ image: video }); },
-    width: 640,
-    height: 480,
-    facingMode,              // 👈 這行讓手機/平板選前/後鏡頭
-  });
-
-  // 等到 video 有尺寸後把 canvas 同步
-  video.addEventListener("loadeddata", () => {
-    if (video.videoWidth && video.videoHeight) {
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
-    }
-  }, { once: true });
-
-  await camera.start();
-  currentFacing = facingMode;
-}
-
-startBtn.addEventListener("click", async () => {
-  try {
-    await initPose(currentFacing);
-    startBtn.style.display = "none";
-  } catch (err) {
-    alert("⚠️ 無法啟用鏡頭：" + err.message);
-    console.error(err);
-  }
-});
-
-// 點選切換鏡頭（若尚未啟動，也只是切換預設）
-camSwitch.addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-mode]");
-  if (!btn) return;
-  const mode = btn.getAttribute("data-mode"); // "user" or "environment"
-  currentFacing = mode;
-  if (video.srcObject || (camera && camera.start)) {
-    // 已啟動 → 直接切換
-    try { await initPose(mode); } catch (err) { console.error(err); }
-  }
-});
-
+      await initPose(currentFacing);
+      startBtn.style.display = "none";
     } catch (err) {
       alert("⚠️ 無法啟用鏡頭：" + err.message);
       console.error(err);
     }
   });
+
+  // 點選切換鏡頭（啟動後也可即時切）
+  camSwitch.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-mode]");
+    if (!btn) return;
+    const mode = btn.getAttribute("data-mode"); // "user" or "environment"
+    try { await initPose(mode); } catch (err) { console.error(err); }
+  });
 </script>
+
 
 </body>
 </html>
