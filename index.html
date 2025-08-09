@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.4</title>
+  <title>CPR 偵測系統 V5.5</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -99,9 +99,12 @@
   let camera = null;
 
   async function initPose() {
-    pose = new Pose.Pose({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
+    console.log("Pose?", window.Pose, "Camera?", window.Camera);
+    
+    pose = new window.Pose({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+});
+    
     pose.setOptions({
       modelComplexity: 0,
       smoothLandmarks: true,
