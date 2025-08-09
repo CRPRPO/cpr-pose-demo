@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.5</title>
+  <title>CPR 偵測系統 V5.6</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -43,6 +43,12 @@
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <button id="startBtn">開啟鏡頭</button>
+  <div id="camSwitch" style="
+  position:absolute; top:12px; right:12px; z-index:3; display:flex; gap:8px;">
+  <button data-mode="user" style="padding:8px 12px; border-radius:8px;">前鏡頭</button>
+  <button data-mode="environment" style="padding:8px 12px; border-radius:8px;">後鏡頭</button>
+</div>
+
 
 <!-- MediaPipe Pose + Camera Utilities（CDN） -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
@@ -178,7 +184,71 @@
   startBtn.addEventListener("click", async () => {
     try {
       await initPose();
-      startBtn.style.display = "none";
+      const camSwitch = document.getElementById("camSwitch");
+let currentFacing = "user";   // 預設前鏡頭
+
+async function initPose(facingMode = "user") {
+  // 若已存在 camera，先停掉
+  if (camera && camera.stop) {
+    try { camera.stop(); } catch (_) {}
+  }
+
+  if (!pose) {
+    pose = new window.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+    pose.setOptions({
+      modelComplexity: 0,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    pose.onResults(onPoseResults);
+  }
+
+  // 用 Camera Utils，嘗試帶入 facingMode
+  camera = new Camera(video, {
+    onFrame: async () => { await pose.send({ image: video }); },
+    width: 640,
+    height: 480,
+    facingMode,              // 👈 這行讓手機/平板選前/後鏡頭
+  });
+
+  // 等到 video 有尺寸後把 canvas 同步
+  video.addEventListener("loadeddata", () => {
+    if (video.videoWidth && video.videoHeight) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+  }, { once: true });
+
+  await camera.start();
+  currentFacing = facingMode;
+}
+
+startBtn.addEventListener("click", async () => {
+  try {
+    await initPose(currentFacing);
+    startBtn.style.display = "none";
+  } catch (err) {
+    alert("⚠️ 無法啟用鏡頭：" + err.message);
+    console.error(err);
+  }
+});
+
+// 點選切換鏡頭（若尚未啟動，也只是切換預設）
+camSwitch.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (!btn) return;
+  const mode = btn.getAttribute("data-mode"); // "user" or "environment"
+  currentFacing = mode;
+  if (video.srcObject || (camera && camera.start)) {
+    // 已啟動 → 直接切換
+    try { await initPose(mode); } catch (err) { console.error(err); }
+  }
+});
+
     } catch (err) {
       alert("⚠️ 無法啟用鏡頭：" + err.message);
       console.error(err);
