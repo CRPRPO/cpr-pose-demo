@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13.5</title>
+  <title>CPR 偵測系統 V5.13.6</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -91,7 +91,7 @@
   // 手腕狀態
   let pose=null, camera=null, currentFacing='user';
   let wristsOverlapped=false; 
-  let OVERLAP_ON_PX  = 65;// 原本 40 → 放寬一點
+  let OVERLAP_ON_PX  = 20;// 原本 65 → 放寬一點
   let OVERLAP_OFF_PX = 85;// 原本 56 → 放寬一點
   let fitMode='cover'; // cover=填滿, contain=完整
 
