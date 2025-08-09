@@ -1,70 +1,48 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.11</title>
+  <title>CPR 偵測系統 V5.12</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: black;
-    }
-    video, canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;  /* 用 100dvh 避免手機瀏覽器位址列收展造成的高度誤差 */
-      height: 100dvh;          /* 避免手機瀏覽器地址列影響高度 */
-      object-fit: cover;       /* ← 讓兩者等比填滿，避免黑邊錯位 */
-    }
-    .mirror {                   /* 需要鏡像時加上這個 class */
-      transform: scaleX(-1);
-      transform-origin: center;
-    }
+  body { margin: 0; overflow: hidden; background: black; }
 
-    /* 新增：左上角 HUD（DOM，不再用 canvas 寫字） */
-    /* DOM HUD（用它顯示速率/次數） */
-    #hud {
-      position: absolute;
-      top: 0; left: 0;
-      padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 12px 16px;
-      z-index: 4;
-      display: grid;
-      gap: 6px;
-      background: rgba(0,0,0,0.55);  /* 半透明底 */
-      border-bottom-right-radius: 14px;
-      /* RWD 字級：手機不太小、桌機不太大 */
-      font: bold clamp(18px, 2.4vw, 36px) / 1.1 sans-serif;
-      color: #fff;
-      pointer-events: none;     /* 點不到 HUD，避免擋到切換鈕 */
-    }
-    #hud .row { white-space: nowrap; }
-    #hud .val { margin-left: 6px; }
+  /* 視訊/畫布：滿版 */
+  video, canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100vw; height: 100dvh;
+    object-fit: cover;               /* 預設：填滿 */
+  }
+  /* 切到“完整顯示”時套在 <body> 的 class */
+  .fit-contain video, .fit-contain canvas { object-fit: contain; }
 
-    /* 橫式時把 HUD 移到右上，避免被畫面內容擠到 */
-    @media (orientation: landscape) {
-      #hud {
-        left: auto;
-        right: 12px;
-      }
-    }
+  .mirror { transform: scaleX(-1); transform-origin: center; }
 
-    canvas { z-index: 1; }
-    #startBtn {
-      position: absolute;
-      top: 40%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      font-size: 1.5em;
-      padding: 20px 30px;
-      background-color: #28a745;
-      color: white;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      z-index: 2;
-    }
-  </style>
+  /* 左上 HUD（DOM） */
+  #hud{
+    position:absolute; top:0; left:0;
+    padding: calc(env(safe-area-inset-top,0px) + 12px) 16px 12px 16px;
+    z-index:4; display:grid; gap:6px;
+    background: rgba(0,0,0,.55);
+    border-bottom-right-radius:14px;
+    font: bold clamp(18px, 2.4vw, 36px)/1.1 sans-serif;
+    color:#fff; pointer-events:none;
+  }
+  #hud .row{ white-space:nowrap; }
+
+  canvas { z-index:1; }
+  #startBtn{
+    position:absolute; top:40%; left:50%; transform:translate(-50%,-50%);
+    font-size:1.5em; padding:20px 30px; background:#28a745; color:#fff;
+    border:0; border-radius:12px; cursor:pointer; z-index:2;
+  }
+
+  /* 右上控制列（切換鏡頭 / 顯示模式） */
+  #camSwitch{
+    position:absolute; top:12px; right:12px; z-index:10;
+    display:flex; gap:8px;
+  }
+</style>
+
 </head>
 <body>
   <video id="video" autoplay playsinline muted></video>
@@ -78,11 +56,17 @@
 
   <button id="startBtn">開啟鏡頭</button>
 
+  <div id="camSwitch">
+    <button data-mode="user"         style="padding:8px 12px; border-radius:8px;">前鏡頭</button>
+    <button data-mode="environment"  style="padding:8px 12px; border-radius:8px;">後鏡頭</button>
+    <button id="fitToggle"           style="padding:8px 12px; border-radius:8px;">顯示：填滿</button>
+  </div>
+
   <div id="camSwitch" style="position:absolute; top:12px; right:12px; z-index:3; display:flex; gap:8px;">
     <button data-mode="user" style="padding:8px 12px; border-radius:8px;">前鏡頭</button>
     <button data-mode="environment" style="padding:8px 12px; border-radius:8px;">後鏡頭</button>
+    <button id="fitToggle" style="padding:8px 12px; border-radius:8px;">顯示：填滿</button>
   </div>
-
 
 <!-- MediaPipe Pose + Camera Utilities（CDN） -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
@@ -143,8 +127,28 @@
   // HiDPI：把 canvas 內部像素對齊螢幕實體像素，但 CSS 尺寸維持 100vw/100dvh
 const dpr = Math.max(1, window.devicePixelRatio || 1);
 function syncCanvasToVideo() {
+  // CSS 盒子大小（畫面實際看到的大小）
   const cw = canvas.clientWidth;   // 例如整個視窗寬（CSS px）
   const ch = canvas.clientHeight;  // 例如整個視窗高（CSS px）
+  // 影片原始尺寸
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
+
+  // object-fit: contain 的縮放倍率與置中位移
+  const s  = Math.min(cw / vw, ch / vh);   // ★改成最小比率（contain）
+  const dx = (cw - vw * s) / 2;
+  const dy = (ch - vh * s) / 2;
+
+  // 設定座標系：HiDPI 映射 → 置中 → 縮放 →（必要時）鏡像
+ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+ctx.clearRect(0, 0, cw, ch);
+ctx.translate(dx, dy);
+ctx.scale(s, s);
+if (currentFacing === "user") {
+  ctx.translate(vw, 0);
+  ctx.scale(-1, 1);
+}
+
   if (!cw || !ch) return;
   canvas.width  = Math.round(cw * dpr);   // 只設「內部像素」
   canvas.height = Math.round(ch * dpr);
@@ -187,7 +191,9 @@ function syncCanvasToVideo() {
 
     camera = new Camera(video, {
       onFrame: async () => { await pose.send({ image: video }); },
-      width: 640, height: 480, facingMode
+      width: 1280,   // 提高寬度
+      height: 720,   // 提高高度
+      facingMode
     });
 
     video.addEventListener("loadeddata", () => { syncCanvasToVideo(); }, { once:true });
@@ -205,39 +211,47 @@ function syncCanvasToVideo() {
     OVERLAP_ON_PX  = Math.max(24, base * 0.03);  // 至少 24px
     OVERLAP_OFF_PX = Math.max(36, base * 0.05);
   }
+  // 0) 顯示模式狀態：'cover' 或 'contain'
+let fitMode = 'cover'; // 預設填滿
 
-  // ===== 每幀繪製：只畫肩與手臂 + 交疊切換=====
-  function onPoseResults(results) {
+// 1) 切換按鈕
+const fitToggle = document.getElementById('fitToggle');
+fitToggle.addEventListener('click', () => {
+  fitMode = (fitMode === 'cover') ? 'contain' : 'cover';
+  // 切換 body 的 class，讓 CSS 的 object-fit 跟著換
+  document.body.classList.toggle('fit-contain', fitMode === 'contain');
+  // 更新按鈕文字
+  fitToggle.textContent = '顯示：' + (fitMode === 'cover' ? '填滿' : '完整');
+});
+
+// 2) onPoseResults 內：算縮放與位移時改用 cover/contain 對應的公式
+function onPoseResults(results) {
   const lm = results.poseLandmarks;
   if (!lm) return;
 
-  // 先把 canvas 內部像素同步到目前視窗大小
   syncCanvasToVideo();
 
-  // CSS 盒子大小（畫面實際看到的大小）
-  const cw = canvas.clientWidth;
-  const ch = canvas.clientHeight;
+  // 依當前視窗與影片原始尺寸計算
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;  // CSS 尺寸
+  const vw = video.videoWidth || 640, vh = video.videoHeight || 480;
 
-  // 影片原始尺寸（landmark 的座標基準）
-  const vw = video.videoWidth || 640;
-  const vh = video.videoHeight || 480;
+  // 依 fitMode 選擇 Math.max(cover) / Math.min(contain)
+  const s  = (fitMode === 'cover')
+    ? Math.max(cw / vw, ch / vh)   // 填滿：可能裁切、看起來較「近」
+    : Math.min(cw / vw, ch / vh);  // 完整：不裁切、可能留黑邊
 
-  // object-fit: cover 的縮放倍率與置中位移（以 CSS 像素為單位）
-  const s  = Math.max(cw / vw, ch / vh);      // 放大倍率
-  const dx = (cw - vw * s) / 2;               // 置中後的左邊界
-  const dy = (ch - vh * s) / 2;               // 置中後的上邊界
+  const dx = (cw - vw * s) / 2;
+  const dy = (ch - vh * s) / 2;
 
-  // 設定座標系：先把 1 CSS px 映射到 dpr 實體像素，再套 cover 的位移＋縮放
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
-  ctx.translate(dx, dy);    // 先位移到影像左上角
-  ctx.scale(s, s);          // 再按照 cover 的比例縮放
+  ctx.translate(dx, dy);
+  ctx.scale(s, s);
+  if (currentFacing === 'user') { ctx.translate(vw, 0); ctx.scale(-1, 1); }
 
-  // 若是前鏡頭，對「影像座標」做鏡像（注意：這裡用影片原始寬 vw）
-  if (currentFacing === "user") {
-    ctx.translate(vw, 0);
-    ctx.scale(-1, 1);
-  }
+  // 後面你的 smoothPoint(...) 一律用 vw, vh 作為座標基準
+  // ...（其餘畫點/畫線/計速照舊）
+}
 
   // 之後所有繪圖請用「影片原始座標」，也就是 w=vw, h=vh
   const ls = smoothPoint(L_SHOULDER, lm[L_SHOULDER], vw, vh);
@@ -326,13 +340,5 @@ function syncCanvasToVideo() {
     try { await initPose(mode); } catch (err) { console.error(err); }
   });
 </script>
-
-
-<div id="hud">
-  <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
-  <div class="row">平均速率：<span id="bpmAvg">--</span> 次/分</div>
-  <div class="row">按壓次數：<span id="pressCnt">0</span> 次</div>
-</div>
-
 </body>
 </html>
