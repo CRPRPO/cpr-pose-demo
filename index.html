@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13.2</title>
+  <title>CPR 偵測系統 V5.13.3</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -88,11 +88,11 @@
   function drawCircle(p,r,c){ if(!p) return; ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=c;ctx.fill();}
   function drawLine(a,b,w,c){ if(!a||!b) return; ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineWidth=w;ctx.strokeStyle=c;ctx.stroke();}
 
-  // 狀態
+  // 手腕狀態
   let pose=null, camera=null, currentFacing='user';
   let wristsOverlapped=false, 
-    OVERLAP_ON_PX  = Math.max(40, base *0.05),// 原本 30 → 放寬一點
-    OVERLAP_OFF_PX = Math.max(56; base *0.08);// 原本 48 → 放寬一點
+  let OVERLAP_ON_PX  = 40;// 原本 30 → 放寬一點
+  let OVERLAP_OFF_PX = 56;// 原本 48 → 放寬一點
   let fitMode='cover'; // cover=填滿, contain=完整
 
    // HiDPI：只負責設定內部像素
@@ -131,8 +131,8 @@
     currentFacing = facingMode;
 
     const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
-    OVERLAP_ON_PX = Math.max(24, base*0.03);
-    OVERLAP_OFF_PX= Math.max(36, base*0.05);
+    OVERLAP_ON_PX = Math.max(40, base*0.05);
+    OVERLAP_OFF_PX= Math.max(56, base*0.08);
   }
 
   let overlapReleaseTime = 0; // 放在全域宣告一次
