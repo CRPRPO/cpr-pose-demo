@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.1</title>
+  <title>CPR 偵測系統 V5.2</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -43,13 +43,20 @@
   <video id="video" autoplay playsinline muted></video>
   <canvas id="canvas"></canvas>
   <button id="startBtn">開啟鏡頭</button>
-<script>
+
+  <!-- MediaPipe Pose + Camera Utilities（CDN） -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script>
   const video = document.getElementById("video");
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
   const startBtn = document.getElementById("startBtn");
 
   startBtn.addEventListener("click", async () => {
+    await initPose();   // 啟動 MediaPipe Pose
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       video.srcObject = stream;
@@ -66,6 +73,136 @@
       alert("⚠️ 無法啟用鏡頭：" + err.message);
     }
   });
+// ====== Pose 會用到的索引（MediaPipe 定義）======
+const L_SHOULDER = 11, R_SHOULDER = 12;
+const L_ELBOW    = 13, R_ELBOW    = 14;
+const L_WRIST    = 15, R_WRIST    = 16;
+
+// ====== 簡單的座標平滑（降低跳動）======
+const smoothStore = {};          // key: index -> {x,y}
+const SMOOTH_ALPHA = 0.6;        // 越接近1越平滑（但延遲感越重）
+
+function smoothPoint(idx, raw, w, h) {
+  if (!raw) return null;
+  const x = raw.x * w;
+  const y = raw.y * h;
+  const prev = smoothStore[idx];
+  if (!prev) {
+    smoothStore[idx] = { x, y };
+  } else {
+    smoothStore[idx] = {
+      x: SMOOTH_ALPHA * prev.x + (1 - SMOOTH_ALPHA) * x,
+      y: SMOOTH_ALPHA * prev.y + (1 - SMOOTH_ALPHA) * y,
+    };
+  }
+  return smoothStore[idx];
+}
+
+// ====== 畫點與線的小工具（在鏡像座標系下呼叫）======
+function drawCircle(ctx, p, r, color) {
+  if (!p) return;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawLine(ctx, a, b, width, color) {
+  if (!a || !b) return;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.lineWidth = width;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+}
+
+// ====== Pose 初始化與 onResults 繪製 ======
+let pose = null;
+let camera = null;
+
+async function initPose() {
+  pose = new Pose.Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+  });
+
+  pose.setOptions({
+    modelComplexity: 0,        // 輕量即可
+    smoothLandmarks: true,     // 內建平滑
+    enableSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  pose.onResults(onPoseResults);
+
+  // 用 camera_utils 把 video 每幀送進 Pose
+  camera = new Camera(video, {
+    onFrame: async () => {
+      await pose.send({ image: video });
+    },
+    width: 640,
+    height: 480,
+  });
+  camera.start();
+}
+
+// ====== 這是 Pose 回傳每幀的處理（只畫肩與手臂）======
+function onPoseResults(results) {
+  const landmarks = results.poseLandmarks;
+  if (!landmarks) return;
+
+  // 確保 canvas 跟 video 同尺寸
+  canvas.width  = video.videoWidth  || canvas.width;
+  canvas.height = video.videoHeight || canvas.height;
+
+  const w = canvas.width;
+  const h = canvas.height;
+
+  // 1) 鏡像座標系：讓線條跟你的鏡像影片對齊
+  ctx.save();
+  ctx.clearRect(0, 0, w, h);
+  ctx.translate(w, 0);
+  ctx.scale(-1, 1);
+
+  // 2) 取出並平滑需要的 6 個點
+  const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], w, h);
+  const rs = smoothPoint(R_SHOULDER, landmarks[R_SHOULDER], w, h);
+  const le = smoothPoint(L_ELBOW,    landmarks[L_ELBOW],    w, h);
+  const re = smoothPoint(R_ELBOW,    landmarks[R_ELBOW],    w, h);
+  const lw = smoothPoint(L_WRIST,    landmarks[L_WRIST],    w, h);
+  const rw = smoothPoint(R_WRIST,    landmarks[R_WRIST],    w, h);
+
+  // 3) 畫點（可視化）
+  drawCircle(ctx, ls, 6, "#00BFFF"); // 淺藍
+  drawCircle(ctx, rs, 6, "#00BFFF");
+  drawCircle(ctx, le, 5, "#ff4d4f"); // 紅
+  drawCircle(ctx, re, 5, "#ff4d4f");
+  drawCircle(ctx, lw, 5, "#ff4d4f");
+  drawCircle(ctx, rw, 5, "#ff4d4f");
+
+  // 4) 畫線
+  // 肩膀連線（藍色）
+  drawLine(ctx, ls, rs, 6, "#1E90FF");
+
+  // 左手臂 肩→肘→腕（紅色）
+  drawLine(ctx, ls, le, 6, "#FF3333");
+  drawLine(ctx, le, lw, 6, "#FF3333");
+
+  // 右手臂 肩→肘→腕（紅色）
+  drawLine(ctx, rs, re, 6, "#FF3333");
+  drawLine(ctx, re, rw, 6, "#FF3333");
+
+  // 5) 結束鏡像區塊
+  ctx.restore();
+
+  // 6) 這裡如果你原本有「非鏡像的文字 HUD」就放在 restore() 之後畫
+  //    例如你 V5.1 的左上角「即時速率/平均/次數」區塊就維持原狀：
+  // ctx.fillStyle = "#fff";
+  // ctx.font = "bold 28px sans-serif";
+  // ctx.fillText("即時速率：xxx 次/分", 20, 40);
+  // ...
+}
 
 function drawLoop() {
   ctx.save();
