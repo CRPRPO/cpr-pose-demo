@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13.6</title>
+  <title>CPR 偵測系統 V5.13.7</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -47,6 +47,8 @@
     <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
     <div class="row">平均速率：<span id="bpmAvg">--</span> 次/分</div>
     <div class="row">按壓次數：<span id="pressCnt">0</span> 次</div>
+    <div class="row">手腕距離：<span id="wristDist">--</span> px</div>
+    <div class="row">交疊狀態：<span id="overlapState">--</span></div>
   </div>
 
   <button id="startBtn">開啟鏡頭</button>
@@ -91,7 +93,7 @@
   // 手腕狀態
   let pose=null, camera=null, currentFacing='user';
   let wristsOverlapped=false; 
-  let OVERLAP_ON_PX  = 20;// 原本 65 → 放寬一點
+  let OVERLAP_ON_PX  = 65;// 原本 65 → 放寬一點
   let OVERLAP_OFF_PX = 85;// 原本 56 → 放寬一點
   let fitMode='cover'; // cover=填滿, contain=完整
 
@@ -169,6 +171,9 @@
     let merged=null;
     if (lw && rw) {
   const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
+      // 更新 debug HUD
+  document.getElementById('wristDist').textContent = dist.toFixed(1);
+  document.getElementById('overlapState').textContent = wristsOverlapped ? '交疊中' : '分開';
 
   if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
       wristsOverlapped = true;
