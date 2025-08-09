@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.10</title>
+  <title>CPR 偵測系統 V5.11</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -140,16 +140,16 @@
   let OVERLAP_ON_PX = 30; // 進入交疊門檻
   let OVERLAP_OFF_PX = 48; // 釋放門檻（> ON 的 1.6 倍）
 
-  // HiDPI 同步
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  function syncCanvasToVideo() {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw || !vh) return;
-    canvas.width  = Math.round(vw * dpr);
-    canvas.height = Math.round(vh * dpr);
-    canvas.style.width = vw + "px";
-    canvas.style.height = vh + "px";
-  }
+  // HiDPI：把 canvas 內部像素對齊螢幕實體像素，但 CSS 尺寸維持 100vw/100dvh
+const dpr = Math.max(1, window.devicePixelRatio || 1);
+function syncCanvasToVideo() {
+  const cw = canvas.clientWidth;   // 例如整個視窗寬（CSS px）
+  const ch = canvas.clientHeight;  // 例如整個視窗高（CSS px）
+  if (!cw || !ch) return;
+  canvas.width  = Math.round(cw * dpr);   // 只設「內部像素」
+  canvas.height = Math.round(ch * dpr);
+  // 不要碰 canvas.style.width/height！讓它繼續是 100vw / 100dvh
+}
 
   // ===== 指標計算（只在交疊期間更新）=====
   let prevWristsOverlapped = false;
@@ -208,27 +208,46 @@
 
   // ===== 每幀繪製：只畫肩與手臂 + 交疊切換=====
   function onPoseResults(results) {
-    const lm = results.poseLandmarks;
-    if (!lm) return;
+  const lm = results.poseLandmarks;
+  if (!lm) return;
 
-    syncCanvasToVideo();
+  // 先把 canvas 內部像素同步到目前視窗大小
+  syncCanvasToVideo();
 
-    // 將座標系設為「CSS 像素」再處理鏡像
-    const wCss = video.videoWidth || canvas.width / dpr;
-    const hCss = video.videoHeight || canvas.height / dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // 1 CSS px = dpr 實體 px
-    ctx.clearRect(0, 0, wCss, hCss);
-    if (currentFacing === "user") { ctx.translate(wCss, 0); ctx.scale(-1, 1); }
+  // CSS 盒子大小（畫面實際看到的大小）
+  const cw = canvas.clientWidth;
+  const ch = canvas.clientHeight;
 
-    // 取點（已平滑）平滑後座標
-    const ls = smoothPoint(L_SHOULDER, lm[L_SHOULDER], wCss, hCss);
-    const rs = smoothPoint(R_SHOULDER, lm[R_SHOULDER], wCss, hCss);
-    const le = smoothPoint(L_ELBOW,    lm[L_ELBOW],    wCss, hCss);
-    const re = smoothPoint(R_ELBOW,    lm[R_ELBOW],    wCss, hCss);
-    const lw = smoothPoint(L_WRIST,    lm[L_WRIST],    wCss, hCss);
-    const rw = smoothPoint(R_WRIST,    lm[R_WRIST],    wCss, hCss);
+  // 影片原始尺寸（landmark 的座標基準）
+  const vw = video.videoWidth || 640;
+  const vh = video.videoHeight || 480;
 
-    // 手腕交疊（遲滯）手腕交疊判斷
+  // object-fit: cover 的縮放倍率與置中位移（以 CSS 像素為單位）
+  const s  = Math.max(cw / vw, ch / vh);      // 放大倍率
+  const dx = (cw - vw * s) / 2;               // 置中後的左邊界
+  const dy = (ch - vh * s) / 2;               // 置中後的上邊界
+
+  // 設定座標系：先把 1 CSS px 映射到 dpr 實體像素，再套 cover 的位移＋縮放
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.translate(dx, dy);    // 先位移到影像左上角
+  ctx.scale(s, s);          // 再按照 cover 的比例縮放
+
+  // 若是前鏡頭，對「影像座標」做鏡像（注意：這裡用影片原始寬 vw）
+  if (currentFacing === "user") {
+    ctx.translate(vw, 0);
+    ctx.scale(-1, 1);
+  }
+
+  // 之後所有繪圖請用「影片原始座標」，也就是 w=vw, h=vh
+  const ls = smoothPoint(L_SHOULDER, lm[L_SHOULDER], vw, vh);
+  const rs = smoothPoint(R_SHOULDER, lm[R_SHOULDER], vw, vh);
+  const le = smoothPoint(L_ELBOW,    lm[L_ELBOW],    vw, vh);
+  const re = smoothPoint(R_ELBOW,    lm[R_ELBOW],    vw, vh);
+  const lw = smoothPoint(L_WRIST,    lm[L_WRIST],    vw, vh);
+  const rw = smoothPoint(R_WRIST,    lm[R_WRIST],    vw, vh);
+
+     // 手腕交疊（遲滯）手腕交疊判斷
     let mergedWrist = null;
     if (lw && rw) {
       const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
@@ -289,10 +308,10 @@
       }
     }
 
-    // ===== 更新 HUD（DOM）=====
-    elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : "--";
-    elBpmAvg.textContent = (bpmAvg30 && bpmAvg30 > 0) ? Math.round(bpmAvg30) : "--";
-    elPress.textContent  = pressCount;
+    // ===== 更新 HUD（DOM）===== 更新 HUD
+  elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : "--";
+  elBpmAvg.textContent = (bpmAvg30 && bpmAvg30 > 0) ? Math.round(bpmAvg30) : "--";
+  elPress.textContent  = pressCount;
   }
 
   // ===== 事件 =====
