@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.2</title>
+  <title>CPR 偵測系統 V5.3</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -48,6 +48,12 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
+  <!-- 再載入你的主程式 -->
+<script>
+  if (!window.Pose || !window.Camera) {
+    console.error("MediaPipe 尚未載入");
+  }
+    
   <script>
   const video = document.getElementById("video");
   const canvas = document.getElementById("canvas");
@@ -55,24 +61,48 @@
   const startBtn = document.getElementById("startBtn");
 
   startBtn.addEventListener("click", async () => {
-    await initPose();   // 啟動 MediaPipe Pose
+  try {
+    await initPose();          // 只做這件事
+    startBtn.style.display = "none";
+  } catch (err) {
+    alert("⚠️ 無法啟用鏡頭：" + err.message);
+  }
+});
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
-
-      video.addEventListener("loadedmetadata", () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        startBtn.style.display = "none";
-
-        // 設定畫布自動更新
-        requestAnimationFrame(drawLoop);
-      });
-    } catch (err) {
-      alert("⚠️ 無法啟用鏡頭：" + err.message);
-    }
+    async function initPose() {
+  pose = new Pose.Pose({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
   });
+
+  pose.setOptions({
+    modelComplexity: 0,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+
+  pose.onResults(onPoseResults);
+
+  camera = new Camera(video, {
+    onFrame: async () => {
+      await pose.send({ image: video });
+    },
+    width: 640,
+    height: 480,
+  });
+
+  // 等 video 可以播放後再對齊畫布尺寸
+  video.addEventListener("loadeddata", () => {
+    if (video.videoWidth && video.videoHeight) {
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+  }, { once: true });
+
+  await camera.start();
+}
+
 // ====== Pose 會用到的索引（MediaPipe 定義）======
 const L_SHOULDER = 11, R_SHOULDER = 12;
 const L_ELBOW    = 13, R_ELBOW    = 14;
