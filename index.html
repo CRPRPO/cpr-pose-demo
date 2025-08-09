@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5.7</title>
+  <title>CPR 偵測系統 V5.8</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -10,16 +10,19 @@
       background: black;
     }
     video, canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-    }
-    video {
-      transform: scaleX(-1); /* 鏡像影片 */
-      z-index: 0;
-    }
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;         /* ← 讓兩者等比填滿，避免黑邊錯位 */
+}
+/* 刪掉原本 video { transform: scaleX(-1) } */
+.mirror {
+  transform: scaleX(-1);     /* ← 需要鏡像時再加這個 class */
+  transform-origin: center;
+}
+
     canvas {
       z-index: 1;
     }
@@ -156,6 +159,9 @@
     }, { once: true });
 
     await camera.start();
+    // 依鏡頭決定是否鏡像顯示
+    const isMirrored = (facingMode === "user");
+    video.classList.toggle("mirror", isMirrored);
     currentFacing = facingMode;
   }
 
@@ -170,9 +176,12 @@
     ctx.save();
     ctx.clearRect(0, 0, w, h);
 
-    // 鏡像（與 <video> 一致）
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
+   // 只有前鏡頭才鏡像，讓線條與影片一致
+    const isMirrored = (currentFacing === "user");
+    if (isMirrored) {
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    }
 
     // 平滑後座標
     const ls = smoothPoint(L_SHOULDER, landmarks[L_SHOULDER], w, h);
@@ -220,10 +229,63 @@
 
     ctx.restore();
 
+    // ... 你原本的 ls/rs/le/re/lw/rw 取點
+
+// ---- 雙腕交疊 gating（與你現有 wristsOverlapped 同步）----
+const nowSec = Date.now() / 1000;
+
+// 交疊狀態切換：從「未交疊→交疊」時重置計算
+if (wristsOverlapped && !prevWristsOverlapped) {
+  resetMetrics();
+}
+prevWristsOverlapped = wristsOverlapped;
+
+// ---- 只有在交疊期間才更新速率 ----
+if (wristsOverlapped && ls && rs) {
+  // 兩肩平均 y（畫面座標，數值越大代表越往下）
+  const avgY = (ls.y + rs.y) / 2;
+  yBuf.push({ t: nowSec, y: avgY });
+  if (yBuf.length > 3) yBuf.shift();
+
+  // 用最近 3 筆判斷局部極值
+  if (yBuf.length === 3) {
+    const [a, b, c] = yBuf;
+    const isPeak   = (b.y > a.y && b.y > c.y);
+    const isValley = (b.y < a.y && b.y < c.y);
+
+    if (isPeak && lastExtrema === 'valley') {
+      // 完成一個「峰-谷-峰」循環 → 計一次
+      pressCount++;
+      peakTimes.push(b.t);
+
+      // 即時速率：用最近 5 次峰算（不足 5 顯示 0）
+      bpmNow = bpmFromPeaks(peakTimes, 5);
+
+      // 平均速率：用最近 30 次峰的時間跨度（不足 30 顯示 null）
+      bpmAvg30 = peakTimes.length >= 30 ? bpmFromPeaks(peakTimes, 30) : null;
+
+      lastExtrema = 'peak';
+    } else if (isPeak) {
+      lastExtrema = 'peak';
+    } else if (isValley) {
+      lastExtrema = 'valley';
+    }
+  }
+}
+
+// =======（這裡是你原本的畫線程式，保持不變）=======
+// …肩膀藍線、一般模式紅線 / 交疊模式黃線 …
+// ================================================
+
+ctx.restore();
+
+// ---- 非鏡像 HUD：分開時數字凍結；再次交疊會重置為 0 ----
+drawHUD();
+
     // 這裡（非鏡像區）可畫你的左上角 HUD
-    // ctx.fillStyle = "#fff";
-    // ctx.font = "bold 28px sans-serif";
-    // ctx.fillText("即時速率：xxx 次/分", 20, 40);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 28px sans-serif";
+    ctx.fillText("即時速率：xxx 次/分", 20, 40);
   }
 
   // ---- 啟動與切換事件 ----
@@ -244,6 +306,45 @@
     const mode = btn.getAttribute("data-mode"); // "user" or "environment"
     try { await initPose(mode); } catch (err) { console.error(err); }
   });
+
+  // ---- 速率與計數（僅雙腕交疊時運作；分開凍結；再次交疊歸零）----
+let prevWristsOverlapped = false;
+let yBuf = [];                  // 最近 3 筆肩膀平均 y
+let lastExtrema = null;         // 'peak' | 'valley'
+let peakTimes = [];             // 每次「峰」時間（秒）
+let pressCount = 0;
+let bpmNow = 0;                 // 以最近 5 次計算
+let bpmAvg30 = null;            // 以最近 30 次計算（不足 30 顯示 '--'）
+
+function resetMetrics() {
+  yBuf = [];
+  lastExtrema = null;
+  peakTimes = [];
+  pressCount = 0;
+  bpmNow = 0;
+  bpmAvg30 = null;
+}
+
+// 以最近 N 次峰值時間，換算 bpm
+function bpmFromPeaks(times, N) {
+  if (times.length < N) return 0;
+  const t1 = times[times.length - N];
+  const t2 = times[times.length - 1];
+  const cycles = N - 1;                 // N 個峰有 N-1 個完整週期
+  const span = t2 - t1;                 // 秒
+  return span > 0 ? (cycles / span) * 60 : 0;
+}
+
+function drawHUD() {
+  ctx.fillStyle = "rgba(0,0,0,0.65)";
+  ctx.fillRect(12, 12, 420, 120);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 28px sans-serif";
+  ctx.fillText(`即時速率：${bpmNow ? Math.round(bpmNow) : '--'} 次/分`, 24, 52);
+  ctx.fillText(`平均速率：${bpmAvg30 ? Math.round(bpmAvg30) : '--'} 次/分`, 24, 88);
+  ctx.fillText(`按壓次數：${pressCount} 次`, 24, 124);
+}
+
 </script>
 
 
