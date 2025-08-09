@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>CPR 偵測系統 V5</title>
+  <title>CPR 偵測系統 V5.1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body {
@@ -67,23 +67,29 @@
     }
   });
 
-  function drawLoop() {
-    ctx.save();
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // 鏡像畫布 (左右反轉)
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
+function drawLoop() {
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 可以畫些測試用的畫面，例如：
-    ctx.fillStyle = "white";
-    ctx.font = "20px sans-serif";
-    ctx.fillText("鏡像測試中", 50, 50);
+  // 鏡像影像與圖形（人物、線條、點）
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
 
-    ctx.restore();
+  // 這裡可以畫 landmark、身體線條等
+  // ...
 
-    requestAnimationFrame(drawLoop);
-  }
+  ctx.restore(); // ⬅️ 恢復畫布，不讓文字也鏡像
+
+  // 畫左上角的文字
+  ctx.fillStyle = "white";
+  ctx.font = "bold 24px sans-serif";
+  ctx.fillText("即時速率：xxx 次/分", 20, 40);
+  ctx.fillText("平均速率：xxx 次/分", 20, 75);
+  ctx.fillText("按壓次數：xxx 次", 20, 110);
+
+  requestAnimationFrame(drawLoop);
+}
+
 </script>
 </body>
 </html>
