@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13</title>
+  <title>CPR 偵測系統 V5.13.1</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -95,23 +95,7 @@
     OVERLAP_OFF_PX = 56; // 原本 48 → 放寬一點
   let fitMode='cover'; // cover=填滿, contain=完整
 
-    //即使距離瞬間超過 OVERLAP_OFF_PX，也先等待 0.2 秒再判斷解除交疊，避免短暫抖動導致退出交疊模式
-  let overlapReleaseTime = 0;
-
-  if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
-    wristsOverlapped = true;
-  } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
-    if (!overlapReleaseTime) overlapReleaseTime = Date.now();
-    if (Date.now() - overlapReleaseTime > 200) { // 超過 0.2 秒才釋放
-      wristsOverlapped = false;
-      overlapReleaseTime = 0;
-    }
-  } else {
-    overlapReleaseTime = 0;
-  }
-
-    
-  // HiDPI：只負責設定內部像素
+   // HiDPI：只負責設定內部像素
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   function syncCanvasToVideo(){
     const cw=canvas.clientWidth, ch=canvas.clientHeight;
@@ -151,6 +135,8 @@
     OVERLAP_OFF_PX= Math.max(36, base*0.05);
   }
 
+  let overlapReleaseTime = 0; // 放在全域宣告一次
+    
   function onPoseResults(results){
     const lm = results.poseLandmarks;
     if(!lm) return;
@@ -181,12 +167,25 @@
 
     // 交疊判斷（遲滯）
     let merged=null;
-    if(lw&&rw){
-      const dist=Math.hypot(lw.x-rw.x,lw.y-rw.y);
-      if(!wristsOverlapped && dist<OVERLAP_ON_PX) wristsOverlapped=true;
-      else if(wristsOverlapped && dist>OVERLAP_OFF_PX) wristsOverlapped=false;
-      if(wristsOverlapped) merged={x:(lw.x+rw.x)/2, y:(lw.y+rw.y)/2};
+    if (lw && rw) {
+  const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
+
+  if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
+      wristsOverlapped = true;
+    } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
+      if (!overlapReleaseTime) overlapReleaseTime = Date.now();
+      if (Date.now() - overlapReleaseTime > 200) {
+        wristsOverlapped = false;
+        overlapReleaseTime = 0;
+      }
+    } else {
+      overlapReleaseTime = 0;
     }
+  
+    if (wristsOverlapped) {
+      merged = { x: (lw.x + rw.x) / 2, y: (lw.y + rw.y) / 2 };
+    }
+  }
 
     // 畫肩
     drawCircle(ls,6,'#00BFFF'); drawCircle(rs,6,'#00BFFF');
