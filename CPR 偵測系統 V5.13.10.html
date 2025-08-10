@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>CPR 偵測系統 V5.13.10</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body{margin:0;overflow:hidden;background:#000;}
+
+    /* 視訊/畫布：滿版盒子，影像比例由 object-fit 控制 */
+    video,canvas{
+      position:absolute;top:0;left:0;width:100vw;height:100dvh;object-fit:cover;
+    }
+    /* 切到「完整顯示」時，套在 <body> 的 class */
+    .fit-contain video, .fit-contain canvas{ object-fit:contain; }
+
+    .mirror{ transform:scaleX(-1); transform-origin:center; }
+
+    /* 左上 HUD（永遠左上，不再隨橫直切換） */
+    #hud{
+      position:absolute;top:0;left:0;
+      padding:calc(env(safe-area-inset-top,0px)+12px) 16px 12px 16px;
+      z-index:4;display:grid;gap:6px;background:rgba(0,0,0,.55);
+      border-bottom-right-radius:14px;font:bold clamp(18px,2.4vw,36px)/1.1 sans-serif;
+      color:#fff;pointer-events:none;
+    }
+    #hud .row{white-space:nowrap;}
+
+    canvas{z-index:1;}
+    #startBtn{
+      position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);
+      font-size:1.5em;padding:20px 30px;background:#28a745;color:#fff;border:0;
+      border-radius:12px;cursor:pointer;z-index:2;
+    }
+    /* 右上控制列（只保留一個） */
+    #camSwitch{
+      position:absolute;top:12px;right:12px;z-index:10;display:flex;gap:8px;
+    }
+    #camSwitch button{padding:8px 12px;border-radius:8px;}
+  </style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="row">即時速率：<span id="bpmNow">--</span> 次/分</div>
+    <div class="row">平均速率：<span id="bpmAvg">--</span> 次/分</div>
+    <div class="row">按壓次數：<span id="pressCnt">0</span> 次</div>
+    <div class="row">手腕距離：<span id="wristDist">--</span> px</div>
+    <div class="row">交疊狀態：<span id="overlapState">--</span></div>
+  </div>
+
+  <button id="startBtn">開啟鏡頭</button>
+
+  <div id="camSwitch">
+    <button data-mode="user">前鏡頭</button>
+    <button data-mode="environment">後鏡頭</button>
+    <button id="fitToggle">顯示：填滿</button>
+  </div>
+
+  <!-- MediaPipe -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script>
+  // DOM
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const camSwitch = document.getElementById('camSwitch');
+  const fitToggle = document.getElementById('fitToggle');
+  const elBpmNow = document.getElementById('bpmNow');
+  const elBpmAvg = document.getElementById('bpmAvg');
+  const elPress  = document.getElementById('pressCnt');
+
+  // Pose 索引
+  const L_SHOULDER=11,R_SHOULDER=12,L_ELBOW=13,R_ELBOW=14,L_WRIST=15,R_WRIST=16;
+
+  // 平滑
+  const smoothStore={}, SMOOTH_ALPHA=0.7; // 原本是 0.8，數值越接近 1 越穩定，但會增加延遲
+  function smoothPoint(i,raw,w,h){
+    if(!raw) return null;
+    const x=raw.x*w, y=raw.y*h, p=smoothStore[i];
+    return smoothStore[i]= p?{x:SMOOTH_ALPHA*p.x+(1-SMOOTH_ALPHA)*x,
+                              y:SMOOTH_ALPHA*p.y+(1-SMOOTH_ALPHA)*y}:{x,y};
+  }
+
+  function drawCircle(p,r,c){ if(!p) return; ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=c;ctx.fill();}
+  function drawLine(a,b,w,c){ if(!a||!b) return; ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineWidth=w;ctx.strokeStyle=c;ctx.stroke();}
+
+  // 手腕狀態
+  let pose=null, camera=null, currentFacing='user';
+  let wristsOverlapped=false; 
+  //let OVERLAP_ON_PX  = 80;// 原本 65 → 放寬一點
+  //let OVERLAP_OFF_PX = 100;// 原本 56 → 放寬一點
+  let fitMode='cover'; // cover=填滿, contain=完整
+
+   // HiDPI：只負責設定內部像素
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  function syncCanvasToVideo(){
+    const cw=canvas.clientWidth, ch=canvas.clientHeight;
+    if(!cw||!ch) return;
+    canvas.width = Math.round(cw*dpr);
+    canvas.height= Math.round(ch*dpr);
+  }
+
+  // 計速
+  let prevWristsOverlapped=false, yBuf=[], lastExtrema=null, peakTimes=[];
+  let pressCount=0, bpmNow=0, bpmAvg30=null;
+  function resetMetrics(){ yBuf=[]; lastExtrema=null; peakTimes=[]; pressCount=0; bpmNow=0; bpmAvg30=null; }
+  function bpmFromPeaks(t,N){ if(t.length<N) return 0; const span=t[t.length-1]-t[t.length-N]; return span>0?((N-1)/span)*60:0; }
+
+  async function initPose(facingMode='user'){
+    if(camera && camera.stop){ try{ await camera.stop(); }catch(e){} }
+
+    if(!pose){
+      pose = new window.Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+      pose.setOptions({ modelComplexity:0, smoothLandmarks:true, enableSegmentation:false, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+      pose.onResults(onPoseResults);
+    }
+
+    camera = new Camera(video, {
+      onFrame: async () => { await pose.send({ image: video }); },
+      width: 1280, height: 720, facingMode
+    });
+
+    video.addEventListener('loadeddata', ()=>{ syncCanvasToVideo(); }, {once:true});
+    await camera.start();
+
+    video.classList.toggle('mirror', facingMode==='user');
+    currentFacing = facingMode;
+
+    const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
+    OVERLAP_ON_PX = Math.max(60, base*0.6); //越小越容易進
+    OVERLAP_OFF_PX= Math.max(100, base*0.15); //原本0.18
+  }
+
+  let overlapReleaseTime = 0; // 放在全域宣告一次
+    
+  function onPoseResults(results){
+    const lm = results.poseLandmarks;
+    if(!lm) return;
+
+    syncCanvasToVideo();
+
+    // CSS 盒大小 & 影片原始大小
+    const cw=canvas.clientWidth, ch=canvas.clientHeight;
+    const vw=video.videoWidth||640, vh=video.videoHeight||480;
+
+    // cover/contain 對應的縮放與置中
+    const s  = (fitMode==='cover') ? Math.max(cw/vw, ch/vh) : Math.min(cw/vw, ch/vh);
+    const dx = (cw - vw*s)/2, dy = (ch - vh*s)/2;
+
+    // 設定座標系 + 鏡像（如需）
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,cw,ch);
+    ctx.translate(dx,dy); ctx.scale(s,s);
+    if(currentFacing==='user'){ ctx.translate(vw,0); ctx.scale(-1,1); }
+
+    // 之後一律用 vw, vh 當座標基準
+    const ls=smoothPoint(L_SHOULDER,lm[L_SHOULDER],vw,vh);
+    const rs=smoothPoint(R_SHOULDER,lm[R_SHOULDER],vw,vh);
+    const le=smoothPoint(L_ELBOW,   lm[L_ELBOW],   vw,vh);
+    const re=smoothPoint(R_ELBOW,   lm[R_ELBOW],   vw,vh);
+    const lw=smoothPoint(L_WRIST,   lm[L_WRIST],   vw,vh);
+    const rw=smoothPoint(R_WRIST,   lm[R_WRIST],   vw,vh);
+
+    // 交疊判斷（遲滯）
+    let merged=null;
+    if (lw && rw) {
+  const dist = Math.hypot(lw.x - rw.x, lw.y - rw.y);
+      // 更新 debug HUD
+  document.getElementById('wristDist').textContent = dist.toFixed(1);
+  document.getElementById('overlapState').textContent = wristsOverlapped ? '交疊中' : '分開';
+
+  if (!wristsOverlapped && dist < OVERLAP_ON_PX) {
+      wristsOverlapped = true;
+    } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
+      if (!overlapReleaseTime) overlapReleaseTime = Date.now();
+      if (Date.now() - overlapReleaseTime > 600) {  // 是毫秒（0.6 秒）
+        wristsOverlapped = false;
+        overlapReleaseTime = 0;
+      }
+    } else {
+      overlapReleaseTime = 0;
+    }
+  
+    if (wristsOverlapped) {
+      merged = { x: (lw.x + rw.x) / 2, y: (lw.y + rw.y) / 2 };
+    }
+  }
+
+    // 畫肩
+    drawCircle(ls,6,'#00BFFF'); drawCircle(rs,6,'#00BFFF');
+    drawLine(ls,rs,6,'#1E90FF');
+
+    // 畫手臂
+    if(wristsOverlapped && merged){
+      drawLine(ls,merged,8,'#FFC107'); drawLine(rs,merged,8,'#FFC107'); drawCircle(merged,7,'#FFC107');
+    }else{
+      drawCircle(le,5,'#FF4D4F'); drawCircle(re,5,'#FF4D4F');
+      drawCircle(lw,5,'#FF4D4F'); drawCircle(rw,5,'#FF4D4F');
+      drawLine(ls,le,6,'#FF3333'); drawLine(le,lw,6,'#FF3333');
+      drawLine(rs,re,6,'#FF3333'); drawLine(re,rw,6,'#FF3333');
+    }
+
+    // 計速（只在交疊期間）
+    const now = Date.now()/1000;
+    if(wristsOverlapped && !prevWristsOverlapped) resetMetrics();
+    prevWristsOverlapped = wristsOverlapped;
+
+    if(wristsOverlapped && ls && rs){
+      const avgY=(ls.y+rs.y)/2;
+      yBuf.push({t:now,y:avgY}); if(yBuf.length>3) yBuf.shift();
+      if(yBuf.length===3){
+        const [a,b,c]=yBuf, peak=(b.y>a.y && b.y>c.y), valley=(b.y<a.y && b.y<c.y);
+        if(peak && lastExtrema==='valley'){
+          pressCount++; peakTimes.push(b.t);
+          bpmNow  = bpmFromPeaks(peakTimes,5);
+          bpmAvg30= peakTimes.length>=30 ? bpmFromPeaks(peakTimes,30) : null;
+          lastExtrema='peak';
+        }else if(peak){ lastExtrema='peak'; }
+        else if(valley){ lastExtrema='valley'; }
+      }
+    }
+
+    // 更新 HUD（DOM）
+    elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : '--';
+    elBpmAvg.textContent = (bpmAvg30 && bpmAvg30>0) ? Math.round(bpmAvg30) : '--';
+    elPress.textContent  = pressCount;
+  }
+
+  // UI 事件
+  startBtn.addEventListener('click', async ()=>{
+    try{ await initPose(currentFacing); startBtn.style.display='none'; }
+    catch(err){ alert('⚠️ 無法啟用鏡頭：'+err.message); console.error(err); }
+  });
+
+  camSwitch.addEventListener('click', async (e)=>{
+    const btn=e.target.closest('button[data-mode],#fitToggle'); if(!btn) return;
+    if(btn.id==='fitToggle'){
+      fitMode = (fitMode==='cover') ? 'contain' : 'cover';
+      document.body.classList.toggle('fit-contain', fitMode==='contain');
+      btn.textContent = '顯示：' + (fitMode==='cover' ? '填滿' : '完整');
+      return; // 這個按鈕不切鏡頭
+    }
+    const mode = btn.getAttribute('data-mode'); // user | environment
+    try{ await initPose(mode); }catch(err){ console.error(err); }
+  });
+  </script>
+</body>
+</html>
