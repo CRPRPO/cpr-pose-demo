@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V16</title>
+  <title>CPR 偵測系統 V16.1 debug</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -613,5 +613,9 @@
     try{ await initPose(mode); }catch(err){ console.error(err); }
   });
   </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
+
 </body>
 </html>
