@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13.9</title>
+  <title>CPR 偵測系統 V5.13.10</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -79,7 +79,7 @@
   const L_SHOULDER=11,R_SHOULDER=12,L_ELBOW=13,R_ELBOW=14,L_WRIST=15,R_WRIST=16;
 
   // 平滑
-  const smoothStore={}, SMOOTH_ALPHA=0.8; // 原本是 0.65，數值越接近 1 越穩定，但會增加延遲
+  const smoothStore={}, SMOOTH_ALPHA=0.7; // 原本是 0.8，數值越接近 1 越穩定，但會增加延遲
   function smoothPoint(i,raw,w,h){
     if(!raw) return null;
     const x=raw.x*w, y=raw.y*h, p=smoothStore[i];
@@ -134,7 +134,7 @@
 
     const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
     OVERLAP_ON_PX = Math.max(60, base*0.6); //越小越容易進
-    OVERLAP_OFF_PX= Math.max(100, base*0.18);
+    OVERLAP_OFF_PX= Math.max(100, base*0.15); //原本0.18
   }
 
   let overlapReleaseTime = 0; // 放在全域宣告一次
