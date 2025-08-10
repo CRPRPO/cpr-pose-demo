@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V5.13.8</title>
+  <title>CPR 偵測系統 V5.13.9</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -133,7 +133,7 @@
     currentFacing = facingMode;
 
     const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
-    OVERLAP_ON_PX = Math.max(80, base*0.1);
+    OVERLAP_ON_PX = Math.max(60, base*0.6); //越小越容易進
     OVERLAP_OFF_PX= Math.max(100, base*0.18);
   }
 
@@ -179,7 +179,7 @@
       wristsOverlapped = true;
     } else if (wristsOverlapped && dist > OVERLAP_OFF_PX) {
       if (!overlapReleaseTime) overlapReleaseTime = Date.now();
-      if (Date.now() - overlapReleaseTime > 700) {  // 是毫秒（0.2 秒）
+      if (Date.now() - overlapReleaseTime > 600) {  // 是毫秒（0.6 秒）
         wristsOverlapped = false;
         overlapReleaseTime = 0;
       }
