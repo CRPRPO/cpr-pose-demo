@@ -2,11 +2,10 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V16.3.2（調參面板）</title>
+  <title>CPR 偵測系統 V16.3.3（調參面板）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
-    /* 視訊/畫布：滿版盒子，影像比例由 object-fit 控制 */
     video,canvas{position:absolute;top:0;left:0;width:100vw;height:100dvh;object-fit:cover;}
     .fit-contain video, .fit-contain canvas{ object-fit:contain; }
     .mirror{ transform:scaleX(-1); transform-origin:center; }
@@ -29,6 +28,7 @@
     /* 右上控制列 */
     #camSwitch{position:absolute;top:12px;right:12px;z-index:10;display:flex;gap:8px;}
     #camSwitch button{padding:8px 12px;border-radius:8px;}
+    #fitToggle{padding:8px 12px;border-radius:8px;}
 
     /* 校準提示 */
     #calibHint{
@@ -40,7 +40,7 @@
     /* ====== 右側調參面板 ====== */
     #panel{
       position:absolute;right:10px;top:70px;z-index:20;
-      width:min(86vw,340px);max-height:80vh;overflow:auto;
+      width:min(86vw,360px);max-height:80vh;overflow:auto;
       background:rgba(20,20,20,.88);color:#fff;border-radius:12px;padding:12px 12px 10px 12px;
       font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans TC", sans-serif;
       box-shadow:0 6px 24px rgba(0,0,0,.45);backdrop-filter:blur(4px)
@@ -92,49 +92,57 @@
   <!-- ====== 調參面板 ====== -->
   <div id="panel" hidden>
     <h3>即時調參</h3>
-    <small>變更即生效（存到本機 localStorage；可隨時重設或儲存預設）</small>
+    <small>滑桿變更立即生效；按「儲存為預設」才會在重整後保留</small>
 
     <div class="g">
       <label>SMOOTH_ALPHA（平滑）</label>
       <input id="alpha" type="range" min="0.40" max="0.95" step="0.01"><span id="alphaVal" class="val"></span>
-      <small>↑ 調大＝影像更穩但延遲↑；↓ 調小＝更即時但抖動↑</small><span></span>
+      <small>↑ 調大＝更穩但延遲↑；↓ 更即時但抖動↑</small><span></span>
     </div>
 
     <div class="g">
       <label>TAU_DEG（角度閾值，度）</label>
       <input id="tauDeg" type="range" min="4" max="14" step="1"><span id="tauDegVal" class="val"></span>
-      <small>↑ 調大＝不易判彎（保守）；↓ 調小＝容易判彎（敏感）</small><span></span>
+      <small>↑ 調大＝不易判彎（保守）；↓ 容易判彎（敏感）</small><span></span>
     </div>
 
     <div class="g">
       <label>TAU_LEN（比例閾值，%）</label>
       <input id="tauLen" type="range" min="0" max="0.12" step="0.005"><span id="tauLenVal" class="val"></span>
-      <small>↑ 調大＝需縮短更多才算彎；↓ 調小＝小幅縮短也算彎</small><span></span>
+      <small>↑ 調大＝要縮短更多才算彎；↓ 小幅縮短也算彎</small><span></span>
     </div>
 
     <div class="grid2">
       <div class="g">
         <label>N_BEND_ON（連續幀數）</label>
         <input id="nOn" type="range" min="2" max="12" step="1"><span id="nOnVal" class="val"></span>
-        <small>↑ 調大＝要維持更久才判彎；↓ 調小＝較快判彎</small><span></span>
+        <small>↑ 調大＝要維持更久才判彎</small><span></span>
       </div>
       <div class="g">
         <label>N_BEND_OFF（連續幀數）</label>
         <input id="nOff" type="range" min="2" max="12" step="1"><span id="nOffVal" class="val"></span>
-        <small>↑ 調大＝更不易解除；↓ 調小＝較快解除</small><span></span>
+        <small>↑ 調大＝更不易解除彎肘</small><span></span>
       </div>
     </div>
 
     <div class="g">
       <label>HYST_DEG（解除遲滯，度）</label>
       <input id="hystDeg" type="range" min="1" max="6" step="1"><span id="hystDegVal" class="val"></span>
-      <small>↑ 調大＝解除更難（防抖強）；↓ 調小＝較易解除</small><span></span>
+      <small>↑ 調大＝解除需要更明顯的恢復（防抖更強）</small><span></span>
     </div>
 
     <div class="g">
       <label>CALI_SEC（校準秒數）</label>
       <input id="caliSec" type="range" min="0.4" max="1.2" step="0.1"><span id="caliSecVal" class="val"></span>
-      <small>↑ 調大＝校準更穩但慢；↓ 調小＝更快開始但可能不穩</small><span></span>
+      <small>↑ 調大＝校準更穩但慢；↓ 更快開始但可能不穩</small><span></span>
+    </div>
+
+    <!-- 最小振幅（肩寬百分比） -->
+    <div class="g">
+      <label>AMP_MIN（最小振幅，占肩寬 %）</label>
+      <input id="ampMinPct" type="range" min="1.0" max="3.0" step="0.1">
+      <span id="ampMinPctVal" class="val"></span>
+      <small>↑ 調大＝要更大位移才計數（更嚴格）；↓ 容易計數（更敏感）</small><span></span>
     </div>
 
     <hr style="border-color:#333;opacity:.6;margin:8px 0">
@@ -142,17 +150,36 @@
     <div class="g">
       <label>modelComplexity</label>
       <input id="mcx" type="range" min="0" max="2" step="1"><span id="mcxVal" class="val"></span>
-      <small>↑ 調大＝更準但更慢（0=快，2=最準最慢）</small><span></span>
+      <small>0=快、2=最準（但慢）</small><span></span>
     </div>
     <div class="g">
       <label>minDetectionConfidence</label>
       <input id="mdc" type="range" min="0.3" max="0.9" step="0.05"><span id="mdcVal" class="val"></span>
-      <small>↑ 調大＝初次偵測要求更嚴格（少誤判）</small><span></span>
+      <small>↑ 調大＝初次偵測更嚴格</small><span></span>
     </div>
     <div class="g">
       <label>minTrackingConfidence</label>
       <input id="mtc" type="range" min="0.3" max="0.9" step="0.05"><span id="mtcVal" class="val"></span>
-      <small>↑ 調大＝追蹤更穩但易掉點；↓ 調小＝較寬鬆但可能抖</small><span></span>
+      <small>↑ 調大＝追蹤更穩但易掉點</small><span></span>
+    </div>
+
+    <hr style="border-color:#333;opacity:.6;margin:8px 0">
+
+    <!-- 新增：交疊門檻與距離濾波 -->
+    <div class="g">
+      <label>overlapOnFactor（交疊 ON 係數）</label>
+      <input id="olOn" type="range" min="0.08" max="0.28" step="0.01"><span id="olOnVal" class="val"></span>
+      <small>↑ 調大＝更容易進入交疊（ON 門檻↑）</small><span></span>
+    </div>
+    <div class="g">
+      <label>overlapOffFactor（交疊 OFF 係數）</label>
+      <input id="olOff" type="range" min="0.16" max="0.36" step="0.01"><span id="olOffVal" class="val"></span>
+      <small>↑ 調大＝更不容易被拆開（OFF 門檻↑）</small><span></span>
+    </div>
+    <div class="g">
+      <label>wristEmaAlpha（手腕距離 EMA α）</label>
+      <input id="wema" type="range" min="0.60" max="0.95" step="0.01"><span id="wemaVal" class="val"></span>
+      <small>↑ 調大＝更穩但反應慢；↓ 更快進入/離開交疊</small><span></span>
     </div>
 
     <div class="row">
@@ -166,7 +193,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
   <script>
-  // =================== 保留 V5.13.10 主體結構（新增可調面板與穩定化） ===================
+  // =================== 主體結構（加上面板與穩定化） ===================
 
   // DOM
   const video = document.getElementById('video');
@@ -190,26 +217,30 @@
   const elCalibState= document.getElementById('calibState');
   const calibHint   = document.getElementById('calibHint');
 
-  // 參數（localStorage 可持久化）
+  // 建議預設 + localStorage 載入
   const DEFAULTS = {
     SMOOTH_ALPHA: 0.70,
     TAU_DEG: 8,
     HYST_DEG: 3,
     TAU_LEN: 0.06,
+    ampMinPct: 1.5,   // 新增：最小振幅（％，預設 1.5）
     N_BEND_ON: 6,
     N_BEND_OFF: 6,
     CALI_SEC: 0.8,
     modelComplexity: 0,
     minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
+    minTrackingConfidence: 0.5,
+    overlapOnFactor: 0.16,   // ↑ 更容易進入交疊
+    overlapOffFactor: 0.24,  // ↑ 更不容易被拆開
+    wristEmaAlpha: 0.80      // ↑ 更穩但反應慢
   };
-  const LS_KEY = 'cpr_cfg_v163'; // 區分舊版本存檔
+  const LS_KEY = 'cpr_cfg_v163';
   const cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS_KEY) || '{}'));
 
-  // Pose 索引
+  // 節點索引
   const L_SHOULDER=11,R_SHOULDER=12,L_ELBOW=13,R_ELBOW=14,L_WRIST=15,R_WRIST=16;
 
-  // 平滑（用 EMA；SMOOTH_ALPHA 越大越穩但延遲↑）
+  // 平滑（關節）
   const smoothStore={};
   let SMOOTH_ALPHA = cfg.SMOOTH_ALPHA;
   function smoothPoint(i,raw,w,h){
@@ -220,7 +251,7 @@
       : {x,y};
   }
 
-  // 基本繪圖 / 幾何
+  // 小工具
   function drawCircle(p,r,c){ if(!p) return; ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fillStyle=c;ctx.fill();}
   function drawLine(a,b,w,c){ if(!a||!b) return; ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineWidth=w;ctx.strokeStyle=c;ctx.stroke();}
   function dist(a,b){ return (!a||!b)?NaN:Math.hypot(a.x-b.x,a.y-b.y); }
@@ -232,12 +263,6 @@
     let cos=dot/(n1*n2); cos=Math.min(1,Math.max(-1,cos));
     return Math.acos(cos)*180/Math.PI;
   }
-  const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
-
-  // 狀態
-  let pose=null, camera=null, currentFacing='user';
-  let wristsOverlapped=false;
-  let fitMode='cover';
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   function syncCanvasToVideo(){
     const cw=canvas.clientWidth, ch=canvas.clientHeight;
@@ -246,21 +271,18 @@
     canvas.height= Math.round(ch*dpr);
   }
 
-  // 計速緩衝
+  // 狀態
+  let pose=null, camera=null, currentFacing='user';
+  let wristsOverlapped=false, fitMode='cover';
   let prevWristsOverlapped=false, yBuf=[], lastExtrema=null, peakTimes=[];
   let pressCount=0, bpmNow=0, bpmAvg30=null;
-  function resetMetrics(){ yBuf=[]; lastExtrema=null; peakTimes=[]; pressCount=0; bpmNow=0; bpmAvg30=null; }
-  function bpmFromPeaks(t,N){ if(t.length<N) return 0; const span=t[t.length-1]-t[t.length-N]; return span>0?((N-1)/span)*60:0; }
-
-  // 彎肘判定 / 校準
   let CALI_SEC   = cfg.CALI_SEC;
   let TAU_DEG    = cfg.TAU_DEG;
   let HYST_DEG   = cfg.HYST_DEG;
   let TAU_LEN    = cfg.TAU_LEN;
   let N_BEND_ON  = cfg.N_BEND_ON;
   let N_BEND_OFF = cfg.N_BEND_OFF;
-
-  let OVERLAP_ON_PX=30, OVERLAP_OFF_PX=120; // 實際於 initPose 依解析度更新
+  let OVERLAP_ON_PX=45, OVERLAP_OFF_PX=140; // 會在 initPose 用係數更新
   let calibCollect=false, calibEndTime=0;
   let alphaSamples=[], rMinSamples=[];
   let alpha0=null, r0=null;
@@ -268,6 +290,10 @@
   let overlapReleaseTime = 0;
   let dEma = null; // 手腕距離 EMA
 
+  function resetMetrics(){ yBuf=[]; lastExtrema=null; peakTimes=[]; pressCount=0; bpmNow=0; bpmAvg30=null; }
+  function bpmFromPeaks(t,N){ if(t.length<N) return 0; const span=t[t.length-1]-t[t.length-N]; return span>0?((N-1)/span)*60:0; }
+
+  // 校準
   function startCalibrationWindow(){
     calibCollect=true;
     calibEndTime = performance.now()/1000 + CALI_SEC;
@@ -277,8 +303,7 @@
   }
   function finishCalibrationIfReady(now){
     if(!calibCollect || now < calibEndTime) return false;
-    calibCollect=false;
-    calibHint.style.display='none';
+    calibCollect=false; calibHint.style.display='none';
     if(alphaSamples.length>0 && rMinSamples.length>0){
       const m = arr => { const a=[...arr].sort((x,y)=>x-y); const mid=Math.floor(a.length/2); return (a.length%2)?a[mid]:(a[mid-1]+a[mid])/2; };
       alpha0 = m(alphaSamples); r0 = m(rMinSamples);
@@ -308,27 +333,29 @@
     const lw=smoothPoint(L_WRIST,   lm[L_WRIST],   vw,vh);
     const rw=smoothPoint(R_WRIST,   lm[R_WRIST],   vw,vh);
 
-    // 手腕距離（用 EMA 抗抖）
+    // 手腕距離 EMA（用可調 α）
     if (lw && rw){
       const dRaw = Math.hypot(lw.x - rw.x, lw.y - rw.y);
-      dEma = dEma==null ? dRaw : 0.85*dEma + 0.15*dRaw;  // α=0.85 越大越穩
+      const a = cfg.wristEmaAlpha;                 // 0.60~0.95
+      dEma = dEma==null ? dRaw : a*dEma + (1-a)*dRaw;
+      elWristDist.textContent = dEma.toFixed(1);
+    }else{
+      elWristDist.textContent = '--';
     }
-    const dShow = (dEma!=null)?dEma:NaN;
 
-    // 交疊判斷（距離遲滯 + 可見度保護）
+    // 交疊判斷（距離遲滯 + 可見度保護 + 0.9s 離開延遲）
     let merged=null;
     if (lw && rw) {
       const visOK = (lm[L_WRIST].visibility>0.6 && lm[R_WRIST].visibility>0.6);
-      elWristDist.textContent = isFinite(dShow)? dShow.toFixed(1) : '--';
       elOverlap.textContent   = wristsOverlapped ? '交疊中' : '分開';
 
-      if (!wristsOverlapped && isFinite(dShow) && dShow < OVERLAP_ON_PX) {
+      if (!wristsOverlapped && isFinite(dEma) && dEma < OVERLAP_ON_PX) {
         wristsOverlapped = true;
         startCalibrationWindow();
         bent=false; bendOnFrames=0; bendOffFrames=0;
-      } else if (wristsOverlapped && isFinite(dShow) && dShow > OVERLAP_OFF_PX && visOK) {
+      } else if (wristsOverlapped && isFinite(dEma) && dEma > OVERLAP_OFF_PX && visOK) {
         if (!overlapReleaseTime) overlapReleaseTime = Date.now();
-        if (Date.now() - overlapReleaseTime > 900) { // 離開遲滯 0.9s
+        if (Date.now() - overlapReleaseTime > 900) {
           wristsOverlapped = false; overlapReleaseTime = 0;
           calibCollect=false; calibHint.style.display='none';
         }
@@ -393,47 +420,39 @@
     elBendState.style.color = bent ? '#ff9800' : '#fff';
     elCalibState.textContent= (calibCollect ? '蒐集中' : (isFinite(alpha0)?'完成':'未開始'));
 
-    // 峰谷計速（交疊期間才計）
+    // 峰谷計速（交疊期間）
     const now = Date.now()/1000;
     if(wristsOverlapped && !prevWristsOverlapped) resetMetrics();
     prevWristsOverlapped = wristsOverlapped;
 
     if (wristsOverlapped && ls && rs) {
       const avgY = (ls.y + rs.y) / 2;
-
-      // 可選：低通 EMA 後再入列（若你覺得還是抖，解開下面兩行並改用 yEma）
-      // yEma = (yEma==null) ? avgY : 0.8*yEma + 0.2*avgY;
-      // yBuf.push({ t: now, y: yEma });
-
       yBuf.push({ t: now, y: avgY });
       if (yBuf.length > 5) yBuf.shift();
 
       if (yBuf.length === 5) {
-        const [p, q, b, c, d] = yBuf;               // 使用五點窗口，中點 b
-        const peak   = (b.y > q.y && b.y > c.y);    // b 是局部峰
-        const valley = (b.y < q.y && b.y < c.y);    // b 是局部谷
+        const [p, q, b, c, d] = yBuf;
+        const peak   = (b.y > q.y && b.y > c.y);
+        const valley = (b.y < q.y && b.y < c.y);
 
         if (peak && lastExtrema === 'valley') {
-          // 最小振幅門檻（對肩寬比例，避免靜止雜訊）
+          // 最小振幅門檻（肩寬 1.5%）
           const S = dist(ls, rs);
-          const AMP_MIN = S * 0.015;               // 1.5% 肩寬；若仍誤擊可調 0.02~0.025
-          const amp = Math.abs(b.y - q.y);         // b 與前一點 q 的高差近似振幅
+          const AMP_MIN = S * (cfg.ampMinPct / 100); // 用面板設定的百分比
+          const amp = Math.abs(b.y - q.y);
           if (!(isFinite(S) && amp >= AMP_MIN)) {
             lastExtrema = 'peak';
-            return; // 視為雜訊
+            return; // 振幅太小，視為雜訊
           }
 
-          // 合理心率範圍 + 不應期（過快/過慢忽略）
-          const MIN_INTERVAL = 0.30;               // 上限約 200 bpm；若誤擊快頻→調大
-          const MAX_INTERVAL = 1.20;               // 下限約 50 bpm
+
+          // 不應期 / 合理頻率
+          const MIN_INTERVAL = 0.30;
+          const MAX_INTERVAL = 1.20;
           const lastT = peakTimes.length ? peakTimes[peakTimes.length - 1] : 0;
           const dt = b.t - lastT;
-          if (peakTimes.length && (dt < MIN_INTERVAL || dt > MAX_INTERVAL)) {
-            lastExtrema = 'peak';
-            return;
-          }
+          if (peakTimes.length && (dt < MIN_INTERVAL || dt > MAX_INTERVAL)) { lastExtrema = 'peak'; return; }
 
-          // 真正計數（彎肘時暫停計數）
           if (!bent) {
             pressCount++;
             peakTimes.push(b.t);
@@ -453,9 +472,12 @@
     elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : '--';
     elBpmAvg.textContent = (bpmAvg30 && bpmAvg30>0) ? Math.round(bpmAvg30) : '--';
     elPress.textContent  = pressCount;
-  } // ← 別漏掉這個收尾大括號！
+  } // onPoseResults end
 
-  // UI 事件
+  // UI
+  document.getElementById('togglePanel').onclick = ()=>{
+    const p = document.getElementById('panel'); p.hidden = !p.hidden;
+  };
   startBtn.addEventListener('click', async ()=>{
     try{ await initPose(currentFacing); startBtn.style.display='none'; }
     catch(err){ alert('⚠️ 無法啟用鏡頭：'+err.message); console.error(err); }
@@ -463,8 +485,9 @@
   camSwitch.addEventListener('click', async (e)=>{
     const btn=e.target.closest('button[data-mode],#fitToggle'); if(!btn) return;
     if(btn.id==='fitToggle'){
-      fitMode = (fitMode==='cover') ? 'contain' : 'cover';
-      document.body.classList.toggle('fit-contain', fitMode==='contain');
+      const body=document.body;
+      const fitModeNow = body.classList.toggle('fit-contain');
+      fitMode = fitModeNow ? 'contain' : 'cover';
       btn.textContent = '顯示：' + (fitMode==='cover' ? '填滿' : '完整');
       return;
     }
@@ -472,7 +495,7 @@
     try{ await initPose(mode); }catch(err){ console.error(err); }
   });
 
-  // 初始化 / 切換鏡頭
+  // 相機 / Pose
   async function initPose(facingMode='user'){
     if(camera && camera.stop){ try{ await camera.stop(); }catch(e){} }
     if(!pose){
@@ -486,7 +509,6 @@
       });
       pose.onResults(onPoseResults);
     }else{
-      // 已存在 → 套用最新設定
       pose.setOptions({
         modelComplexity: cfg.modelComplexity,
         minDetectionConfidence: cfg.minDetectionConfidence,
@@ -505,13 +527,13 @@
     video.classList.toggle('mirror', facingMode==='user');
     currentFacing = facingMode;
 
-    // 依影像尺寸更新交疊門檻（ON 小、OFF 大 → 有遲滯）
+    // 依影像短邊計算門檻（並套 px 下限）
     const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
-    OVERLAP_ON_PX  = Math.max(30,  base*0.10); // 想更容易「進入交疊」→ 調小
-    OVERLAP_OFF_PX = Math.max(120, base*0.22); // 想更不容易「被拆開」→ 調大
+    OVERLAP_ON_PX  = Math.max(45,  base*cfg.overlapOnFactor);
+    OVERLAP_OFF_PX = Math.max(140, base*cfg.overlapOffFactor);
   }
 
-  // ====== 面板：綁定 ======
+  // ====== 面板綁定 ======
   const $ = sel => document.querySelector(sel);
   const bind = (id, get, set, fmt=x=>x) => {
     const input = $('#'+id), out = $('#'+id+'Val');
@@ -523,27 +545,21 @@
     });
   };
 
-  // 開/關面板
-  const panel = $('#panel');
-  $('#togglePanel').onclick = ()=> panel.hidden = !panel.hidden;
+  function applyAndPersist(){ localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }
 
-  function applyAndPersist(){
-    localStorage.setItem(LS_KEY, JSON.stringify(cfg));
-  }
   function resetDefaults(){
     Object.assign(cfg, DEFAULTS);
-    // 同步可調變數
+    // 同步即時變數
     SMOOTH_ALPHA = cfg.SMOOTH_ALPHA;
     TAU_DEG=cfg.TAU_DEG; HYST_DEG=cfg.HYST_DEG; TAU_LEN=cfg.TAU_LEN;
     N_BEND_ON=cfg.N_BEND_ON; N_BEND_OFF=cfg.N_BEND_OFF; CALI_SEC=cfg.CALI_SEC;
-    // 重繪面板數值
-    initPanelBindings(true);
-    // 套用到 Pose（若已啟動）
+    // 更新 Pose（若已啟動）
     if(pose){ pose.setOptions({
       modelComplexity: cfg.modelComplexity,
       minDetectionConfidence: cfg.minDetectionConfidence,
       minTrackingConfidence: cfg.minTrackingConfidence
     });}
+    initPanelBindings();
   }
 
   function initPanelBindings(){
@@ -554,19 +570,25 @@
     bind('nOff',   ()=>cfg.N_BEND_OFF,   v=>{ cfg.N_BEND_OFF=v|0; N_BEND_OFF=v|0; }, v=>v.toFixed(0));
     bind('hystDeg',()=>cfg.HYST_DEG,     v=>{ cfg.HYST_DEG=v; HYST_DEG=v; }, v=>v.toFixed(0));
     bind('caliSec',()=>cfg.CALI_SEC,     v=>{ cfg.CALI_SEC=v; CALI_SEC=v; }, v=>v.toFixed(1));
+
     bind('mcx',    ()=>cfg.modelComplexity, v=>{ cfg.modelComplexity=v|0; if(pose) pose.setOptions({modelComplexity: cfg.modelComplexity}); }, v=>v.toFixed(0));
     bind('mdc',    ()=>cfg.minDetectionConfidence, v=>{ cfg.minDetectionConfidence=v; if(pose) pose.setOptions({minDetectionConfidence: cfg.minDetectionConfidence}); }, v=>v.toFixed(2));
     bind('mtc',    ()=>cfg.minTrackingConfidence,  v=>{ cfg.minTrackingConfidence=v; if(pose) pose.setOptions({minTrackingConfidence: cfg.minTrackingConfidence}); }, v=>v.toFixed(2));
+
+    // 新增：交疊門檻與距離 EMA
+    bind('olOn',  ()=>cfg.overlapOnFactor,  v=>{ cfg.overlapOnFactor=v;  /* 門檻生效在下次 initPose；或這裡也可即時計算 */ }, v=>v.toFixed(2));
+    bind('olOff', ()=>cfg.overlapOffFactor, v=>{ cfg.overlapOffFactor=v; /* 同上 */ }, v=>v.toFixed(2));
+    bind('wema',  ()=>cfg.wristEmaAlpha,    v=>{ cfg.wristEmaAlpha=v; }, v=>v.toFixed(2));
+    bind('ampMinPct', ()=>cfg.ampMinPct, v=>{ cfg.ampMinPct=v; }, v=>v.toFixed(1)+'%');
+
   }
 
-  // 初始化面板
   initPanelBindings();
   document.getElementById('saveBtn').onclick = ()=>{ applyAndPersist(); alert('已儲存為預設（本裝置瀏覽器）'); };
   document.getElementById('resetBtn').onclick = ()=>{ resetDefaults(); };
-
   </script>
 
-  <!-- 行動裝置 Console（如果不需要可移除） -->
+  <!-- 行動裝置 Console（可移除） -->
   <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
   <script>eruda.init();</script>
 </body>
