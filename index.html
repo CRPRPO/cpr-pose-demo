@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V16.3（調參面板）</title>
+  <title>CPR 偵測系統 V16.3.1（調參面板）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -191,7 +191,7 @@
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5
   };
-  const LS_KEY = 'cpr_cfg_v162';
+  const LS_KEY = 'cpr_cfg_v163';
   const cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(LS_KEY) || '{}'));
 
   // Pose 索引
@@ -304,11 +304,11 @@
       elWristDist.textContent = d.toFixed(1);
       elOverlap.textContent   = wristsOverlapped ? '交疊中' : '分開';
 
-      if (!wristsOverlapped && d < OVERLAP_ON_PX) {
+      if (!wristsOverlapped && dEma < OVERLAP_ON_PX) {
         wristsOverlapped = true;
         startCalibrationWindow();
         bent=false; bendOnFrames=0; bendOffFrames=0;
-      } else if (wristsOverlapped && d > OVERLAP_OFF_PX) {
+      } else if (wristsOverlapped && dEma > OVERLAP_OFF_PX && visOK) {
         if (!overlapReleaseTime) overlapReleaseTime = Date.now();
         if (Date.now() - overlapReleaseTime > 900) {
           wristsOverlapped = false; overlapReleaseTime = 0;
@@ -392,38 +392,55 @@
     if(wristsOverlapped && !prevWristsOverlapped) resetMetrics();
     prevWristsOverlapped = wristsOverlapped;
 
-    if(wristsOverlapped && ls && rs){
-      const avgY=(ls.y+rs.y)/2;
-      yBuf.push({t:now,y:avgY}); if(yBuf.length>5) yBuf.shift(); //拉長極值窗口（3→5 點）或做一次低通
-      if(yBuf.length===5){  //把 yBuf 滑動視窗由 3 幀改 5 幀，誤擊會少很多
-        const [a,b,c]=yBuf, peak=(b.y>a.y && b.y>c.y), valley=(b.y<a.y && b.y<c.y);
-        if(peak && lastExtrema==='valley'){
-          if (!bent){
-            pressCount++; peakTimes.push(b.t);
-            bpmNow  = bpmFromPeaks(peakTimes,5);
-            bpmAvg30= peakTimes.length>=30 ? bpmFromPeaks(peakTimes,30) : null;
-          }
-          lastExtrema='peak';
-        }else if(peak){ lastExtrema='peak'; }
-        else if(valley){ lastExtrema='valley'; }
+    if (wristsOverlapped && ls && rs) {
+  const avgY = (ls.y + rs.y) / 2;
+  // 低通（可選）：先做一次 EMA 再入列
+  // yEma = (yEma==null) ? avgY : 0.8*yEma + 0.2*avgY;
+  // yBuf.push({ t: now, y: yEma });
+
+  yBuf.push({ t: now, y: avgY });
+  if (yBuf.length > 5) yBuf.shift();
+
+  if (yBuf.length === 5) {
+    const [p, q, b, c, d] = yBuf; // 中間點 b、c
+    const peak   = (b.y > q.y && b.y > c.y);   // b 是局部峰
+    const valley = (b.y < q.y && b.y < c.y);   // b 是局部谷
+
+    // 只有在「b 是峰」且上一個是谷 → 準備計數
+    if (peak && lastExtrema === 'valley') {
+      // -------- 最小振幅門檻（相對肩寬 S）--------
+      const S = dist(ls, rs);
+      const AMP_MIN = S * 0.015; // 1.5% 肩寬，可再調 0.015~0.025
+      const amp = Math.abs(b.y - q.y); // 用 b 與前一點 q 的落差作近似
+      if (!(isFinite(S) && amp >= AMP_MIN)) {
+        lastExtrema = 'peak';
+        return; // 振幅太小，視為雜訊
       }
-    }
-    elBpmNow.textContent = bpmNow ? Math.round(bpmNow) : '--';
-    elBpmAvg.textContent = (bpmAvg30 && bpmAvg30>0) ? Math.round(bpmAvg30) : '--';
-    elPress.textContent  = pressCount;
-  }
-    //不應期 + 合理心率範圍
-    const MIN_INTERVAL = 0.28; // 秒（~214 bpm 上限；你可設 0.33 → 180 bpm）
-    const MAX_INTERVAL = 1.2;  // 秒（~50 bpm 下限）
-    let lastPeakSec = 0;       // 放全域
-    
-    // 在「偵測到 peak」時：
-    const dt = b.t - lastPeakSec;
-    if (dt < MIN_INTERVAL || dt > MAX_INTERVAL) {
+
+      // -------- 合理心率不應期 / 範圍 --------
+      const MIN_INTERVAL = 0.30; // 秒（~200 bpm 上限）
+      const MAX_INTERVAL = 1.20; // 秒（~50 bpm 下限）
+      const dt = b.t - (peakTimes.length ? peakTimes[peakTimes.length - 1] : 0);
+      if (peakTimes.length && (dt < MIN_INTERVAL || dt > MAX_INTERVAL)) {
+        lastExtrema = 'peak';
+        return; // 太快或太慢都不計
+      }
+
+      // -------- 真正計數（非彎肘狀態）--------
+      if (!bent) {
+        pressCount++;
+        peakTimes.push(b.t);
+        bpmNow   = bpmFromPeaks(peakTimes, 5);
+        bpmAvg30 = peakTimes.length >= 30 ? bpmFromPeaks(peakTimes, 30) : null;
+      }
       lastExtrema = 'peak';
-      return; // 太快或太慢都不計
+    } else if (peak) {
+      lastExtrema = 'peak';
+    } else if (valley) {
+      lastExtrema = 'valley';
     }
-    lastPeakSec = b.t;
+  }
+}
 
 
   // UI 事件
