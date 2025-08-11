@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>CPR 偵測系統 V16.2（調參面板）</title>
+  <title>CPR 偵測系統 V16.3（調參面板）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body{margin:0;overflow:hidden;background:#000;}
@@ -246,7 +246,7 @@
   let N_BEND_ON  = cfg.N_BEND_ON;
   let N_BEND_OFF = cfg.N_BEND_OFF;
 
-  let OVERLAP_ON_PX=80, OVERLAP_OFF_PX=100;
+  let OVERLAP_ON_PX=30, OVERLAP_OFF_PX=100;
   let calibCollect=false, calibEndTime=0;
   let alphaSamples=[], rMinSamples=[];
   let alpha0=null, r0=null;
@@ -292,6 +292,11 @@
     const lw=smoothPoint(L_WRIST,   lm[L_WRIST],   vw,vh);
     const rw=smoothPoint(R_WRIST,   lm[R_WRIST],   vw,vh);
 
+    // 放在外層宣告一次：let dEma = null;
+    const dRaw = Math.hypot(lw.x - rw.x, lw.y - rw.y);
+    dEma = dEma==null ? dRaw : 0.85*dEma + 0.15*dRaw;  // α=0.85
+    const d = dEma;
+
     // 交疊判斷（遲滯）
     let merged=null;
     if (lw && rw) {
@@ -305,13 +310,28 @@
         bent=false; bendOnFrames=0; bendOffFrames=0;
       } else if (wristsOverlapped && d > OVERLAP_OFF_PX) {
         if (!overlapReleaseTime) overlapReleaseTime = Date.now();
-        if (Date.now() - overlapReleaseTime > 600) {
+        if (Date.now() - overlapReleaseTime > 900) {
           wristsOverlapped = false; overlapReleaseTime = 0;
           calibCollect=false; calibHint.style.display='none';
         }
       } else { overlapReleaseTime = 0; }
       if (wristsOverlapped) merged = { x: (lw.x + rw.x) / 2, y: (lw.y + rw.y) / 2 };
     }
+
+    const visOK = (lm[L_WRIST].visibility>0.6 && lm[R_WRIST].visibility>0.6);
+      if (wristsOverlapped && (!visOK)) {
+      // 可直接略過離開判定一兩幀
+    }
+
+    // 在計算 S 的地方已有：S = dist(ls, rs);
+    const AMP_MIN = S * 0.015;   // 約 1.5% 肩寬，視你的畫面再調 1–3%
+    const amp = Math.abs(b.y - a.y); // 或 valley→peak 的高差
+    
+      if (amp < AMP_MIN) {
+        // 太小，當雜訊，直接忽略這個 peak
+        lastExtrema = 'peak';
+        return;
+      }
 
     // 畫肩/手臂
     drawCircle(ls,6,'#00BFFF'); drawCircle(rs,6,'#00BFFF'); drawLine(ls,rs,6,'#1E90FF');
@@ -374,8 +394,8 @@
 
     if(wristsOverlapped && ls && rs){
       const avgY=(ls.y+rs.y)/2;
-      yBuf.push({t:now,y:avgY}); if(yBuf.length>3) yBuf.shift();
-      if(yBuf.length===3){
+      yBuf.push({t:now,y:avgY}); if(yBuf.length>5) yBuf.shift(); //拉長極值窗口（3→5 點）或做一次低通
+      if(yBuf.length===5){  //把 yBuf 滑動視窗由 3 幀改 5 幀，誤擊會少很多
         const [a,b,c]=yBuf, peak=(b.y>a.y && b.y>c.y), valley=(b.y<a.y && b.y<c.y);
         if(peak && lastExtrema==='valley'){
           if (!bent){
@@ -392,6 +412,19 @@
     elBpmAvg.textContent = (bpmAvg30 && bpmAvg30>0) ? Math.round(bpmAvg30) : '--';
     elPress.textContent  = pressCount;
   }
+    //不應期 + 合理心率範圍
+    const MIN_INTERVAL = 0.28; // 秒（~214 bpm 上限；你可設 0.33 → 180 bpm）
+    const MAX_INTERVAL = 1.2;  // 秒（~50 bpm 下限）
+    let lastPeakSec = 0;       // 放全域
+    
+    // 在「偵測到 peak」時：
+    const dt = b.t - lastPeakSec;
+    if (dt < MIN_INTERVAL || dt > MAX_INTERVAL) {
+      lastExtrema = 'peak';
+      return; // 太快或太慢都不計
+    }
+    lastPeakSec = b.t;
+
 
   // UI 事件
   startBtn.addEventListener('click', async ()=>{
@@ -442,8 +475,8 @@
     currentFacing = facingMode;
 
     const vw=video.videoWidth||640, vh=video.videoHeight||480, base=Math.min(vw,vh);
-    OVERLAP_ON_PX = Math.max(60, base*0.12);
-    OVERLAP_OFF_PX= Math.max(100, base*0.18);
+    OVERLAP_ON_PX = Math.max(30, base*0.10);
+    OVERLAP_OFF_PX= Math.max(120, base*0.22);
   }
 
   // ====== 面板：綁定 ======
